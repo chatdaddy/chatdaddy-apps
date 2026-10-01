@@ -3,7 +3,7 @@
 Build apps that run inside [ChatDaddy](https://chatdaddy.tech) flows: triggers that start a flow, and actions a flow can call.
 
 - `examples/shopify-order`: a complete app. A Shopify `orders/create` webhook starts a ChatDaddy flow that messages the customer on WhatsApp. It has no runtime dependencies and is tested with `node:test`.
-- `packages/create-chatdaddy-app` (coming next): scaffold a new app, validate its manifest, and run it locally against signed test requests.
+- `packages/create-chatdaddy-app`: scaffold a new app (`init`), check its manifest against ChatDaddy's publish rules (`validate`), and run it locally against a stand-in for ChatDaddy that signs requests exactly like ChatDaddy does (`dev`). See its README.
 
 ## How an app works
 

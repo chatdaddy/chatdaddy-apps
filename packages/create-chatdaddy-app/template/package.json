@@ -1,0 +1,13 @@
+{
+  "name": "{{APP_ID}}",
+  "version": "0.1.0",
+  "private": true,
+  "description": "{{APP_NAME}}: a ChatDaddy app. Zero runtime dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "dev": "CHATDADDY_DEV_PUBLIC_KEY_FILE=.chatdaddy-dev/public-key.pem node src/main.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
