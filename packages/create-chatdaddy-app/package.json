@@ -1,0 +1,15 @@
+{
+  "name": "create-chatdaddy-app",
+  "version": "0.1.0",
+  "description": "Scaffold, validate and locally test a ChatDaddy app. Zero runtime dependencies.",
+  "type": "module",
+  "bin": { "create-chatdaddy-app": "bin/create-chatdaddy-app.mjs" },
+  "files": ["bin", "src", "template", "scripts", "README.md"],
+  "engines": { "node": ">=22" },
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "mutate": "node scripts/mutation-check.mjs",
+    "sync-scopes": "node scripts/sync-scopes.mjs"
+  }
+}

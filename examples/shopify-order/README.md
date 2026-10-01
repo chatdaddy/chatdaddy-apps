@@ -23,10 +23,10 @@ npm test                 # node --test test/*.test.mjs
 npm run mutate           # mutation check: disables each guard, expects the suite to go red, restores
 ```
 
-Validate the manifest (read-only use of the appstore checkout; needs its node_modules):
+Validate the manifest with the builder kit, the same rules ChatDaddy applies when a version is published (from the repo root):
 
 ```
-cd <chatdaddy-service-appstore> && node -r @swc-node/register <this repo>/scripts/validate-manifest.cts <this repo>/chatdaddy-app.json
+node packages/create-chatdaddy-app/bin/create-chatdaddy-app.mjs validate examples/shopify-order/chatdaddy-app.json
 ```
 
 Set `handler.baseUrl` in `chatdaddy-app.json` to the real https URL before publishing.

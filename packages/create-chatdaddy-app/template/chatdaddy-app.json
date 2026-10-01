@@ -1,0 +1,43 @@
+{
+  "manifestVersion": 1,
+  "id": "{{APP_ID}}",
+  "name": "{{APP_NAME}}",
+  "description": "A starter ChatDaddy app: one trigger that starts a flow and one action a flow can call.",
+  "developer": {
+    "name": "Your name",
+    "email": "you@example.com"
+  },
+  "privacyPolicyUrl": "https://example.com/privacy",
+  "scopes": ["ACCOUNT_READ"],
+  "aiUse": "none",
+  "handler": { "type": "url", "baseUrl": "https://example.com" },
+  "flowActions": [
+    {
+      "id": "shout",
+      "title": "Shout",
+      "description": "Upper-cases a piece of text",
+      "inputProperties": [
+        { "propertyPath": "text", "title": "Text", "type": "string", "required": true }
+      ],
+      "outputProperties": [
+        { "propertyPath": "result", "title": "Result", "type": "string", "required": true },
+        { "propertyPath": "length", "title": "Length", "type": "number", "required": true }
+      ]
+    }
+  ],
+  "flowTriggers": [
+    {
+      "id": "example-event",
+      "title": "Example event",
+      "description": "Fires when something happens in your system",
+      "payloadSchema": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string" },
+          "phone": { "type": "string" }
+        }
+      }
+    }
+  ]
+}
