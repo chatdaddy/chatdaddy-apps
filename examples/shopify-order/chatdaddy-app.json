@@ -1,0 +1,60 @@
+{
+  "manifestVersion": 1,
+  "id": "shopify-order-whatsapp",
+  "name": "Shopify order to WhatsApp",
+  "description": "Starts a flow when a Shopify order is created, and formats an order confirmation message for it.",
+  "developer": {
+    "name": "ChatDaddy",
+    "email": "apps@chatdaddy.tech",
+    "url": "https://chatdaddy.tech"
+  },
+  "privacyPolicyUrl": "https://chatdaddy.tech/privacy",
+  "scopes": ["ACCOUNT_READ"],
+  "aiUse": "none",
+  "handler": { "type": "url", "baseUrl": "https://shopify-order.example.com" },
+  "settings": [
+    {
+      "propertyPath": "storeName",
+      "title": "Store name",
+      "description": "Shown in the confirmation message",
+      "type": "string",
+      "required": false
+    }
+  ],
+  "flowActions": [
+    {
+      "id": "format-order-message",
+      "title": "Format order message",
+      "description": "Builds a WhatsApp order confirmation text from order details",
+      "inputProperties": [
+        { "propertyPath": "orderId", "title": "Order ID", "type": "string", "required": true },
+        { "propertyPath": "customerName", "title": "Customer name", "type": "string", "required": false },
+        { "propertyPath": "total", "title": "Total", "type": "string", "required": false },
+        { "propertyPath": "currency", "title": "Currency", "type": "string", "required": false },
+        { "propertyPath": "itemsSummary", "title": "Items summary", "type": "string", "required": false }
+      ],
+      "outputProperties": [
+        { "propertyPath": "message", "title": "Message", "type": "string", "required": true }
+      ]
+    }
+  ],
+  "flowTriggers": [
+    {
+      "id": "shopify-order-created",
+      "title": "Shopify order created",
+      "description": "Fires when Shopify sends an orders/create webhook for this installation",
+      "payloadSchema": {
+        "type": "object",
+        "required": ["orderId", "phone"],
+        "properties": {
+          "orderId": { "type": "string" },
+          "customerName": { "type": "string" },
+          "phone": { "type": "string" },
+          "total": { "type": "string" },
+          "currency": { "type": "string" },
+          "itemsSummary": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

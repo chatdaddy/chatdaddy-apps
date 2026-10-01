@@ -1,0 +1,13 @@
+{
+  "name": "app-shopify-order",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ChatDaddy app store dogfood app: Shopify order -> WhatsApp trigger and message formatter. Zero runtime dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "test": "node --test test/*.test.mjs",
+    "mutate": "node scripts/mutation-check.mjs"
+  }
+}
