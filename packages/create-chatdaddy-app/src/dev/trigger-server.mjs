@@ -12,6 +12,8 @@ import { isValidEventId, verifyAppToBots } from '../../template/src/signing.mjs'
 import { unsupportedKeywords, validate } from '../validate/index.mjs'
 
 export const MAX_TRIGGER_BODY_BYTES = 64 * 1024
+// like the scaffold: a body must arrive within this, so a slow client can't hold a socket
+export const TRIGGER_BODY_TIMEOUT_MS = 10_000
 
 /**
  * @param {object} o
@@ -19,7 +21,7 @@ export const MAX_TRIGGER_BODY_BYTES = 64 * 1024
  * @param {(line: string) => void} [o.log]
  * @param {() => number} [o.now] unix seconds
  */
-export function createTriggerServer({ session, log = () => {}, now = () => Math.floor(Date.now() / 1000) }) {
+export function createTriggerServer({ session, log = () => {}, now = () => Math.floor(Date.now() / 1000), bodyTimeoutMs = TRIGGER_BODY_TIMEOUT_MS }) {
 	const seen = new Set()
 	const warnedKeywords = new Set()
 
@@ -29,7 +31,7 @@ export function createTriggerServer({ session, log = () => {}, now = () => Math.
 		res.end(text)
 	}
 
-	const server = createServer(async(req, res) => {
+	const handle = async(req, res) => {
 		const m = /^\/apps\/triggers\/([^/]+)\/([^/]+)$/.exec(new URL(req.url || '/', 'http://x').pathname)
 		if(req.method !== 'POST' || !m) {
 			return reply(res, 404, { error: 'not found' })
@@ -41,15 +43,26 @@ export function createTriggerServer({ session, log = () => {}, now = () => Math.
 			return reply(res, status, { error: why })
 		}
 
+		if(Number(req.headers['content-length']) > MAX_TRIGGER_BODY_BYTES) {
+			res.setHeader('connection', 'close')
+			return refuse(413, `payload over ${MAX_TRIGGER_BODY_BYTES} bytes`)
+		}
+
+		const timer = setTimeout(() => req.destroy(), bodyTimeoutMs)
 		const chunks = []
 		let size = 0
-		for await (const chunk of req) {
-			size += chunk.length
-			if(size > MAX_TRIGGER_BODY_BYTES) {
-				return refuse(413, `payload over ${MAX_TRIGGER_BODY_BYTES} bytes`)
-			}
+		try {
+			for await (const chunk of req) {
+				size += chunk.length
+				if(size > MAX_TRIGGER_BODY_BYTES) {
+					res.setHeader('connection', 'close')
+					return refuse(413, `payload over ${MAX_TRIGGER_BODY_BYTES} bytes`)
+				}
 
-			chunks.push(chunk)
+				chunks.push(chunk)
+			}
+		} finally {
+			clearTimeout(timer)
 		}
 
 		const raw = Buffer.concat(chunks).toString('utf8')
@@ -108,6 +121,16 @@ export function createTriggerServer({ session, log = () => {}, now = () => Math.
 		session.fired.push({ triggerId, eventId, payload })
 		log(`WOULD FIRE ${triggerId} (event ${eventId}) for installation ${installationId}: ${raw}`)
 		return reply(res, 202, { fired: 1, throttled: 0, failed: 0 })
+	}
+
+	// every unexpected error is a 500, never an unhandled rejection that ends the session
+	const server = createServer((req, res) => {
+		handle(req, res).catch(err => {
+			log(`ERROR handling ${req.method} ${req.url}: ${err?.message || err}`)
+			if(!res.headersSent && !res.destroyed && !req.destroyed) {
+				reply(res, 500, { error: 'internal error in the dev server' })
+			}
+		})
 	})
 
 	return {

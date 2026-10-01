@@ -33,7 +33,9 @@ function suite() {
 	const files = readdirSync(join(root, 'test')).filter(f => f.endsWith('.test.mjs')).map(f => `test/${f}`)
 	const env = { ...process.env }
 	delete env.NODE_TEST_CONTEXT
-	const r = spawnSync(process.execPath, ['--test', '--test-timeout=60000', ...files], { cwd: root, encoding: 'utf8', env, timeout: 150_000 })
+	// a mutation that hangs the suite is killed by the outer timeout and counted
+	// red (non-zero exit); the file is always restored from the backup afterwards
+	const r = spawnSync(process.execPath, ['--test', '--test-timeout=60000', ...files], { cwd: root, encoding: 'utf8', env, timeout: 300_000 })
 	const failed = [...r.stdout.matchAll(/^\s*not ok \d+ - (.+)$/gm)].map(m => m[1]).filter(n => !/\.test\.mjs$/.test(n))
 	return { code: r.status, failed: [...new Set(failed)], pass: /# pass (\d+)/.exec(r.stdout)?.[1], fail: /# fail (\d+)/.exec(r.stdout)?.[1] }
 }

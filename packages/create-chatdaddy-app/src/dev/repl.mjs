@@ -133,7 +133,8 @@ export async function runDev({ manifestPath, appUrl, port, keyFile, stdin, out }
 	const session = createDevSession({ manifest, appUrl })
 	const keyPath = resolve(keyFile)
 	mkdirSync(dirname(keyPath), { recursive: true })
-	writeFileSync(keyPath, session.publicKeyPem)
+	// a PUBLIC key (the private one never leaves memory), so world-readable is fine and explicit
+	writeFileSync(keyPath, session.publicKeyPem, { mode: 0o644 })
 
 	const triggers = createTriggerServer({ session, log: out })
 	const boundPort = await triggers.listen(port)
@@ -144,11 +145,8 @@ export async function runDev({ manifestPath, appUrl, port, keyFile, stdin, out }
 		await session.handshake()
 		out(`installed ${manifest.id}: handshake accepted, ack verified`)
 	} catch(err) {
-		if(!(err instanceof DevError)) {
-			throw err
-		}
-
-		out(`handshake failed: ${err.message}`)
+		// any failure here is reported, never a crash: the developer fixes the app and retries
+		out(`handshake failed: ${err instanceof DevError ? err.message : `unexpected error: ${err?.message || err}`}`)
 		out('fix the app, then run `handshake`')
 	}
 

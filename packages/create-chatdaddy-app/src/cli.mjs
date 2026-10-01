@@ -1,9 +1,11 @@
 // create-chatdaddy-app: command dispatch. Returns an exit code, never calls process.exit.
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { runDev } from './dev/repl.mjs'
 import { InitError, init } from './init.mjs'
 import { CATALOGUE_SOURCE, validateManifest } from './validate/index.mjs'
+
+export const MAX_MANIFEST_BYTES = 1024 * 1024
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
@@ -51,6 +53,12 @@ export async function main(argv, io = {}) {
 			const file = positionals[0] || 'chatdaddy-app.json'
 			if(!existsSync(file)) {
 				stderr(`${file}: not found`)
+				return 2
+			}
+
+			// a manifest is a few KB: refuse anything implausibly large before reading it
+			if(statSync(file).size > MAX_MANIFEST_BYTES) {
+				stderr(`${file}: larger than ${MAX_MANIFEST_BYTES} bytes, not a manifest`)
 				return 2
 			}
 

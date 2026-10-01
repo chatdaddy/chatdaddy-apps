@@ -102,7 +102,7 @@ function check(schema, data, path, root, errors) {
 			fail(`must NOT have fewer than ${schema.minLength} characters`)
 		}
 
-		if(schema.pattern !== undefined && !new RegExp(schema.pattern, 'u').test(data)) {
+		if(schema.pattern !== undefined && !patternMatches(schema.pattern, data)) {
 			fail(`must match pattern "${schema.pattern}"`)
 		}
 
@@ -236,4 +236,27 @@ export function unsupportedKeywords(schema, path = '') {
 	}
 
 	return out
+}
+
+// patterns can come from a developer's own payloadSchema (in `dev`): a pattern
+// that doesn't compile, or is implausibly long, is treated as never matching
+// rather than throwing or risking a pathological regex
+const MAX_PATTERN_LENGTH = 1000
+const PATTERNS = new Map()
+function patternMatches(pattern, data) {
+	if(typeof pattern !== 'string' || pattern.length > MAX_PATTERN_LENGTH) {
+		return false
+	}
+
+	if(!PATTERNS.has(pattern)) {
+		let re = null
+		try {
+			re = new RegExp(pattern, 'u')
+		} catch{}
+
+		PATTERNS.set(pattern, re)
+	}
+
+	const re = PATTERNS.get(pattern)
+	return !!re && re.test(data)
 }

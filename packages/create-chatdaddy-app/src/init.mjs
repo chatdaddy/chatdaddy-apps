@@ -52,6 +52,8 @@ export function init(dir, opts = {}) {
 	for(const rel of listFiles(TEMPLATE_DIR)) {
 		const name = basename(rel)
 		let content = readFileSync(join(TEMPLATE_DIR, rel))
+		// the template is static and contains no user text, so substituting
+		// {{APP_ID}} before {{APP_NAME}} can't double-substitute anything
 		if(SUBSTITUTED.has(rel)) {
 			const esc = rel.endsWith('.json') ? s => JSON.stringify(s).slice(1, -1) : s => s
 			content = Buffer.from(content.toString('utf8')
