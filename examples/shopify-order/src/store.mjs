@@ -70,7 +70,18 @@ export class InstallationStore {
 		}
 
 		this.records[installationId] = rec
-		await this.#persist()
+		try {
+			await this.#persist()
+		} catch(err) {
+			// keep memory and disk in step: the handshake fails and ChatDaddy retries it
+			if(prev) {
+				this.records[installationId] = prev
+			} else {
+				delete this.records[installationId]
+			}
+
+			throw err
+		}
 	}
 
 	#persist() {
@@ -80,12 +91,15 @@ export class InstallationStore {
 
 		const snapshot = JSON.stringify(this.records, null, 2)
 		const file = this.file
-		this.queue = this.queue.then(async() => {
+		const write = this.queue.then(async() => {
 			await mkdir(dirname(file), { recursive: true })
 			const tmp = `${file}.tmp`
 			await writeFile(tmp, snapshot, { mode: 0o600 })
 			await rename(tmp, file)
 		})
-		return this.queue
+		// the caller sees this write's failure; the queue itself never stays rejected,
+		// so one failed write doesn't fail every later one
+		this.queue = write.catch(() => undefined)
+		return write
 	}
 }

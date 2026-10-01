@@ -2,10 +2,16 @@ import { CHATDADDY_PUBLIC_KEY } from './jwt.mjs'
 import { createApp } from './server.mjs'
 import { InstallationStore } from './store.mjs'
 
+// structured JSON lines on stdout/stderr; never log request bodies or secrets
+const log = (level, msg, extra = {}) => {
+	const line = JSON.stringify({ level, time: new Date().toISOString(), msg, ...extra })
+	;(level === 'error' ? process.stderr : process.stdout).write(line + '\n')
+}
+
 const need = name => {
 	const v = process.env[name]
 	if(!v) {
-		console.error(`missing env var ${name}`)
+		log('error', 'missing env var', { name })
 		process.exit(1)
 	}
 
@@ -21,4 +27,4 @@ const server = createApp({
 	botsUrl: need('CHATDADDY_BOTS_URL'),
 })
 const port = Number(process.env.PORT || 3000)
-server.listen(port, () => console.log(`app-shopify-order listening on :${port}`))
+server.listen(port, () => log('info', 'app-shopify-order listening', { port }))

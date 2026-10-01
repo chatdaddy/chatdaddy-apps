@@ -77,7 +77,7 @@ export async function startApp(overrides = {}) {
 		body || { installationId, teamId: TEAM, appId: APP_ID, appVersion: '1.0.0', grantedScopes: ['ACCOUNT_READ'], signingSecret: secret, nonce },
 		{ authorization: `Bearer ${token ?? mintToken({ installationId })}` }
 	)
-	return { store, clock, calls, state, post, handshake, close: () => new Promise(r => server.close(r)) }
+	return { base, store, clock, calls, state, post, handshake, close: () => { server.closeAllConnections(); return new Promise(r => server.close(r)) } }
 }
 
 export const SAMPLE_ORDER = {
