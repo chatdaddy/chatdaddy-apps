@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { invalidManifestFixtures, validFullManifest, validMinimalManifest } from './fixtures.mjs'
-import { isPrivateOrLoopbackHost, unsupportedKeywords, validate, validateManifest, KEYWORDS } from '../src/validate/index.mjs'
+import { invalidManifestFixtures, validConnectionVariants, validFullManifest, validMinimalManifest } from './fixtures.mjs'
+import {
+	headerNameProblem, isPrivateOrLoopbackHost, isPublicSuffix, isValidHostLabel, publicSuffixSection, PUBLIC_SUFFIX_SOURCE, TENANT_SUFFIX_ALLOWLIST, unsupportedKeywords, validate, validateManifest, KEYWORDS,
+} from '../src/validate/index.mjs'
+import { PUBLIC_SUFFIX_ICANN_RULES, PUBLIC_SUFFIX_PRIVATE_RULES } from '../src/validate/public-suffix.mjs'
 
 const data = name => JSON.parse(readFileSync(new URL(`../src/data/${name}.json`, import.meta.url), 'utf8'))
 
@@ -42,9 +45,11 @@ for(const f of invalidManifestFixtures) {
 	})
 }
 
-test('all 23 ported invalid fixtures are present, and their valid base passes', () => {
+test('all 23 ported invalid fixtures and the 41 connection fixtures are present, and their valid base passes', () => {
+	// counts pinned on purpose: dropping a fixture must be a visible edit
 	assert.equal(validateManifest(validFullManifest).valid, true)
-	assert.equal(invalidManifestFixtures.length, 23)
+	assert.equal(invalidManifestFixtures.length, 23 + 41)
+	assert.equal(validConnectionVariants.length, 4)
 })
 
 test('ids must be hyphen-separated lower-case slugs', () => {
@@ -61,7 +66,7 @@ test('schema rules the ported fixtures do not reach', () => {
 	const full = validFullManifest
 	const withSetting = s => ({ ...full, settings: [s] })
 	const cases = {
-		'connection hosts must not be empty': { ...full, connections: [{ ...full.connections[0], hosts: [] }] },
+		'connection hosts must not be empty': { ...full, connections: [{ ...full.connections[1], hosts: [] }] },
 		'connection type must be oauth2|apiKey': { ...full, connections: [{ ...full.connections[0], type: 'basic' }] },
 		'a scope may not be an empty string': { ...full, scopes: [''] },
 		'developer.email must be an email': { ...full, developer: { ...full.developer, email: 'not an email' } },
@@ -272,4 +277,216 @@ test('unsupportedKeywords lists what the engine would silently skip', () => {
 test('the manifest schema uses only implemented keywords', async() => {
 	const { APP_MANIFEST_SCHEMA } = await import('../src/validate/index.mjs')
 	assert.deepEqual(unsupportedKeywords(APP_MANIFEST_SCHEMA), [])
+})
+
+// ---- connections ----
+
+for(const v of validConnectionVariants) {
+	test(`accepts: ${v.name}`, () => {
+		const r = validateManifest({ ...validMinimalManifest, connections: [v.connection] })
+		assert.deepEqual(r.errors, [])
+		assert.equal(r.valid, true)
+	})
+}
+
+test('header denylist: refused as headerName and as a forwarded header, case-insensitively', () => {
+	for(const name of [
+		'Host', 'host', 'COOKIE', 'Proxy-Authorization', 'proxy-foo', 'Connection', 'Transfer-Encoding', 'Content-Length',
+		'TE', 'Upgrade', 'X-Forwarded-For', 'x-forwarded-host', 'X-Real-IP',
+		'Forwarded', 'Via', 'Set-Cookie', 'Keep-Alive', 'Expect', 'X-Original-URL', 'X-Rewrite-URL',
+		'X-HTTP-Method-Override', 'X-HTTP-Method', 'X-Method-Override',
+	]) {
+		assert.ok(headerNameProblem(name, { allowAuthorization: true }), name)
+		assert.ok(headerNameProblem(name, { allowAuthorization: false }), name)
+	}
+})
+
+test('authorization is allowed only as the credential headerName', () => {
+	assert.equal(headerNameProblem('Authorization', { allowAuthorization: true }), undefined)
+	assert.ok(headerNameProblem('AUTHORIZATION', { allowAuthorization: false }))
+})
+
+test('header names: token characters pass, anything else is refused', () => {
+	for(const name of ['X-Shopify-Access-Token', 'x-api-key', 'Accept-Language', 'Idempotency-Key', "X-A_b.c~d!#$%&'*+^`|"]) {
+		assert.equal(headerNameProblem(name, { allowAuthorization: false }), undefined, name)
+	}
+
+	for(const name of ['', 'X A', 'X:A', 'X\r\nA', 'X\nA', 'X\0A', 'caf\u00e9', 'X(A)', 'X/A', 'X\tA']) {
+		assert.match(headerNameProblem(name, { allowAuthorization: true }), /not a valid header name/, JSON.stringify(name))
+	}
+})
+
+test('a headerPrefix is printable ASCII only (space allowed; no tab, CR, LF, NUL, DEL or non-ASCII)', () => {
+	const check = headerPrefix => validateManifest({ ...validMinimalManifest, connections: [{ ...validConnectionVariants[0].connection, headerPrefix }] })
+	assert.equal(check('Bearer ').valid, true)
+	assert.equal(check('Token ~!').valid, true)
+	for(const bad of ['a\rb', 'a\nb', 'a\0b', 'Token\t', 'a\x7fb', 'caf\u00e9']) {
+		assert.equal(check(bad).valid, false, JSON.stringify(bad))
+	}
+})
+
+test('a template suffix gets the private-host rules too', () => {
+	const apiKey = validFullManifest.connections[1]
+	const check = host => validateManifest({ ...validMinimalManifest, connections: [{ ...apiKey, hosts: [host] }] })
+	assert.equal(check('{tenant}.acme-cloud.com').valid, true)
+	const privateErrors = host => check(host).errors.filter(e => e.message.includes('private/loopback'))
+	// exactly one: the template is checked by its suffix, not also as an exact host
+	assert.equal(privateErrors('{tenant}.printer.local').length, 1)
+	assert.equal(privateErrors('{tenant}.10.0.0.1').length, 1)
+})
+
+const suffixCheck = host => validateManifest({ ...validMinimalManifest, connections: [{ ...validFullManifest.connections[1], hosts: [host] }] })
+const suffixRefused = host => suffixCheck(host).errors.some(e => e.message.includes('must not be a public suffix'))
+
+test('host template: {x}.myshopify.com is accepted (private section, allowlisted)', () => {
+	assert.deepEqual(suffixCheck('{tenant}.myshopify.com').errors, [])
+	assert.equal(suffixCheck('{tenant}.myshopify.com').valid, true)
+})
+
+test('host template: private-section suffixes that are not allowlisted are refused', () => {
+	for(const suffix of ['github.io', 'herokuapp.com', 'vercel.app', 'workers.dev']) {
+		assert.equal(suffixRefused(`{tenant}.${suffix}`), true, suffix)
+	}
+})
+
+const hasMessage = (host, text) => suffixCheck(host).errors.some(e => e.message.includes(text))
+
+test('host template: ICANN-section suffixes are refused with the public-suffix message (wildcard rules included)', () => {
+	for(const suffix of ['co.uk', 'gov.uk', 'foo.ck', 'com.au']) {
+		assert.equal(suffixRefused(`{tenant}.${suffix}`), true, suffix)
+	}
+})
+
+test('host template: a single-label suffix is refused for having fewer than two labels', () => {
+	for(const suffix of ['com', 'unlisted-tld', 'io', '1']) {
+		assert.equal(hasMessage(`{tenant}.${suffix}`, 'at least two labels'), true, suffix)
+	}
+})
+
+test('host template: a numeric last label is refused (it turns the host into an IPv4 address)', () => {
+	// `{s}.168.1` filled with 192 is https://192.168.1, which the URL parser reads as 192.168.0.1
+	assert.equal(new URL('https://192.168.1').hostname, '192.168.0.1')
+	for(const suffix of ['168.1', '1.1', '0x7f.1', '10.0.0.1', 'acme.123']) {
+		assert.equal(hasMessage(`{tenant}.${suffix}`, 'must not end in a numeric label'), true, suffix)
+	}
+})
+
+test('host template: the suffix must equal its own URL normalisation', () => {
+	for(const suffix of ['acme.0x7f', 'xn--a.com', 'acme.0x']) {
+		assert.equal(hasMessage(`{tenant}.${suffix}`, 'own URL normalisation'), true, suffix)
+	}
+})
+
+const exactMessages = host => validateManifest({ ...validMinimalManifest, connections: [{ ...validFullManifest.connections[1], hosts: [host] }] })
+	.errors.filter(e => e.path === '/connections/0/hosts/0').map(e => e.message)
+
+test('exact hosts: anything that is not its own URL normalisation is refused', () => {
+	for(const host of ['a.com:8443', 'u@evil.com', 'evil.com/x', 'a.com?x', 'a.com#f', 'A.com', 'a%41.com']) {
+		assert.ok(exactMessages(host).some(m => m.includes('URL normalisation')), host)
+	}
+})
+
+test('exact hosts: wildcards, trailing dots, empty labels and odd characters are refused', () => {
+	for(const host of ['*.a.com', 'a.com.', 'a..com', '.a.com', 'a_b.com', '-a.com', 'a-.com']) {
+		assert.ok(exactMessages(host).some(m => m.includes('lower-case labels')), host)
+	}
+})
+
+test('exact hosts: IP literals in every form are refused', () => {
+	for(const host of ['127.0.0.1', '8.8.8.8', '[::1]', '[2606:4700::1111]', '2130706433', '0x7f000001', '127.1', '1.2.3']) {
+		assert.ok(exactMessages(host).some(m => m.includes('IP address')), host)
+	}
+})
+
+test('exact hosts: bare lower-case hostnames are accepted', () => {
+	for(const host of ['a.com', 'api.acme.com', 'xn--bcher-kva.example', 'a1.b-2.example.org', 'x.1e3']) {
+		assert.deepEqual(exactMessages(host), [], host)
+	}
+})
+
+test('the oauth2 tie still compares the endpoint hosts in normalised form', () => {
+	const oauth = validFullManifest.connections[0]
+	const r = validateManifest({ ...validMinimalManifest, connections: [{ ...oauth, authUrl: 'https://SHOPIFY.com./a', hosts: ['shopify.com', 'api.shopify.com'] }] })
+	assert.deepEqual(r.errors, [])
+})
+
+test('the tenant allowlist is exactly myshopify.com, and every entry is a private-section suffix', () => {
+	assert.deepEqual([...TENANT_SUFFIX_ALLOWLIST], ['myshopify.com'])
+	for(const suffix of TENANT_SUFFIX_ALLOWLIST) {
+		assert.equal(publicSuffixSection(suffix), 'private')
+	}
+})
+
+test('exact hosts are left alone: neither the list nor the allowlist applies to them', () => {
+	for(const host of ['myshopify.com', 'shop.myshopify.com', 'github.io', 'api.github.io']) {
+		assert.equal(suffixCheck(host).valid, true, host)
+	}
+})
+
+test('isValidHostLabel accepts plain lower-case labels', () => {
+	for(const label of ['a', 'shop', 'my-shop', 'a1', '1a', '0', 'a-b-c', 'x'.repeat(63), 'shop2024']) {
+		assert.equal(isValidHostLabel(label), true, label)
+	}
+})
+
+test('isValidHostLabel rejects everything else', () => {
+	for(const [name, label] of [
+		['upper case', 'Shop'], ['empty', ''], ['leading hyphen', '-shop'], ['trailing hyphen', 'shop-'],
+		['doubled hyphen', 'my--shop'], ['xn-- prefix', 'xn--bcher-kva'], ['dot', 'a.b'], ['trailing dot', 'shop.'],
+		['non-ASCII', 'caf\u00e9'], ['non-ASCII digit', '\u0663'], ['space', 'my shop'], ['slash', 'a/b'],
+		['underscore', 'my_shop'], ['64 characters', 'x'.repeat(64)], ['only a hyphen', '-'],
+		['newline at the end', 'shop\n'], ['at sign', 'a@b'], ['wildcard', '*'], ['brace', '{a}'],
+	]) {
+		assert.equal(isValidHostLabel(label), false, name)
+	}
+
+	for(const v of [undefined, null, 5, {}, ['a']]) {
+		assert.equal(isValidHostLabel(v), false)
+	}
+})
+
+test('isPublicSuffix: listed suffixes (ICANN, private, wildcard, IDN, unlisted TLD)', () => {
+	for(const d of [
+		'com', 'uk', 'co.uk', 'github.io', 'herokuapp.com', 'vercel.app', 'workers.dev', 'myshopify.com',
+		's3.amazonaws.com', 'foo.ck', 'xn--55qx5d.cn', 'unlisted-tld',
+	]) {
+		assert.equal(isPublicSuffix(d), true, d)
+	}
+})
+
+test('isPublicSuffix: registrable domains and the *.ck exception are not suffixes', () => {
+	for(const d of ['example.com', 'acme-cloud.com', 'example.co.uk', 'foo.github.io', 'www.ck', 'a.foo.ck', 'acme.com']) {
+		assert.equal(isPublicSuffix(d), false, d)
+	}
+})
+
+test('the public suffix snapshot has the private section and a recorded source', () => {
+	assert.ok(PUBLIC_SUFFIX_ICANN_RULES.length > 5000)
+	assert.ok(PUBLIC_SUFFIX_PRIVATE_RULES.length > 1000)
+	assert.equal(PUBLIC_SUFFIX_SOURCE.url, 'https://publicsuffix.org/list/public_suffix_list.dat')
+	assert.match(PUBLIC_SUFFIX_SOURCE.version, /^\d{4}-\d{2}-\d{2}_/)
+	for(const rule of ['com', 'co.uk', '*.ck', '!www.ck']) {
+		assert.ok(PUBLIC_SUFFIX_ICANN_RULES.includes(rule), rule)
+	}
+
+	for(const rule of ['github.io', 'vercel.app', 'myshopify.com']) {
+		assert.ok(PUBLIC_SUFFIX_PRIVATE_RULES.includes(rule), rule)
+		assert.ok(!PUBLIC_SUFFIX_ICANN_RULES.includes(rule), rule)
+	}
+})
+
+test('publicSuffixSection tells ICANN, private and neither apart', () => {
+	for(const [domain, section] of [
+		['com', 'icann'], ['co.uk', 'icann'], ['foo.ck', 'icann'], ['unlisted-tld', 'icann'], ['xn--55qx5d.cn', 'icann'],
+		['github.io', 'private'], ['herokuapp.com', 'private'], ['myshopify.com', 'private'], ['s3.amazonaws.com', 'private'],
+		['example.com', undefined], ['foo.github.io', undefined], ['www.ck', undefined],
+	]) {
+		assert.equal(publicSuffixSection(domain), section, domain)
+	}
+})
+
+test('engine: maxItems', () => {
+	assert.deepEqual(errs({ maxItems: 2 }, [1, 2]), [])
+	assert.deepEqual(errs({ maxItems: 2 }, [1, 2, 3]), ['(root) must NOT have more than 2 items'])
+	assert.deepEqual(errs({ maxItems: 2 }, 'abc'), [])
 })

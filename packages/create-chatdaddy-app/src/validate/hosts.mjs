@@ -97,3 +97,18 @@ export function isPrivateOrLoopbackHost(host) {
 
 	return isPrivateIpv4(hostname) || isPrivateIpv6(hostname)
 }
+
+/**
+ * The label rule bots enforce on a connect-time input before it fills a host template:
+ * `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`, applied to the input as given. That is
+ * deliberately stricter than the spec, which lowercases first: upper case is refused, not
+ * folded. It also refuses an `xn--` prefix and any doubled hyphen (which covers `xn--`), and,
+ * as the input is one label, never admits a dot or non-ASCII. Exported so bots can copy it; the manifest's `inputs[].pattern` is advisory only.
+ * @param {unknown} input
+ * @returns {boolean}
+ */
+export function isValidHostLabel(input) {
+	return typeof input === 'string'
+		&& /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(input)
+		&& !input.includes('--')
+}

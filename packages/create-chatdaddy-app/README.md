@@ -63,6 +63,7 @@ It is a dependency-free port of ChatDaddy's publish-time validation: the same tw
 
 1. **JSON Schema (draft-07)**: shapes, required fields, lengths, patterns, `https://` URLs, enums.
 2. **Semantic checks**: scope names must exist **and be app-grantable**, `eventSubscriptions` must be real event names, ids must be unique inside each array, and URLs and hosts must not be private or loopback (so `http://localhost` is rejected at publish; use `dev` for local testing). At least one scope is required.
+3. **Connections** (`connections[]`): an `apiKey` connection needs a `headerName` (and may set a `headerPrefix`), an `oauth2` one needs `authUrl` and `tokenUrl`, and the hosts of those two URLs must be listed in `hosts` as exact hosts. `hosts` may also hold **one host template**, `{<inputId>}.<suffix>`: the placeholder is the whole leftmost label and names an entry of `inputs[]` (at most 3), and the suffix must have at least two lowercase ASCII labels and must not be a public suffix (`github.io`, `herokuapp.com`, `co.uk` and so on). `headerName` and `forwardHeaders[]` may not be `host`, `cookie`, `proxy-*`, `connection`, `transfer-encoding`, `content-length`, `te`, `upgrade`, `x-forwarded-*` or `x-real-ip`; `authorization` is allowed only as the connection's own `headerName`. An input's `pattern` is advisory (it must compile and be at most 200 characters); the server enforces its own label rule, which `isValidHostLabel` in `src/validate/hosts.mjs` implements.
 
 The scope and event lists are a snapshot of the public [`chatdaddy/typescript-client`](https://github.com/chatdaddy/typescript-client).
 They are only as current as the last sync; if ChatDaddy adds a scope you cannot yet use here, regenerate them:
@@ -72,8 +73,15 @@ node scripts/sync-scopes.mjs               # from GitHub, branch main
 node scripts/sync-scopes.mjs --local <path to a typescript-client clone>
 ```
 
+The public suffix check uses a snapshot of the [Public Suffix List](https://publicsuffix.org/list/) (ICANN and private sections), `src/data/public-suffix.json`:
+
+```
+node scripts/sync-public-suffix.mjs                  # from publicsuffix.org
+node scripts/sync-public-suffix.mjs --local <path to public_suffix_list.dat>
+```
+
 The JSON Schema keywords the validator implements are exactly the ones the manifest schema uses:
-`$ref` (local), `type`, `const`, `enum`, `pattern`, `minLength`, `maxLength`, `minItems`, `required`, `properties`,
+`$ref` (local), `type`, `const`, `enum`, `pattern`, `minLength`, `maxLength`, `minItems`, `maxItems`, `required`, `properties`,
 `additionalProperties`, `items`, `oneOf`, `allOf`, `if`/`then`, and `format` (`uri`, `email`).
 
 ## dev: ChatDaddy on your laptop
