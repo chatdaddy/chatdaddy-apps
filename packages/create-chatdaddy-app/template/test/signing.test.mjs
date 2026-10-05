@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { createHmac } from 'node:crypto'
 import { test } from 'node:test'
 import {
-	APP_SIGNATURE_TOLERANCE_S, computeHandshakeAck, signAppToBots, signBotsToApp, verifyAppToBots, verifyBotsToApp,
+	APP_SIGNATURE_TOLERANCE_S, computeHandshakeAck, signAppToBots, signBotsToApp, signUninstalled, verifyAppToBots, verifyBotsToApp, verifyUninstalled,
 } from '../src/signing.mjs'
 
 // Vectors computed by running ChatDaddy's own signing code (not this file) with
@@ -69,4 +70,14 @@ test('header parsing is strict', () => {
 test('previous secret verifies when passed in the list; a wrong secret does not', () => {
 	assert.equal(verifyBotsToApp(['other', S], BODY, V_BOTS_TO_APP, T), true)
 	assert.equal(verifyBotsToApp(['other'], BODY, V_BOTS_TO_APP, T), false)
+})
+
+test('an uninstall notice has its own label: it never verifies as an action call, nor an action call as a notice', () => {
+	const sig = signUninstalled(S, BODY, T)
+	const expected = createHmac('sha256', S).update(`chatdaddy/v1/uninstalled.${T}.${BODY}`).digest('hex')
+	assert.equal(sig, `t=${T},v1=${expected}`)
+	assert.equal(verifyUninstalled(S, BODY, sig, T), true)
+	assert.equal(verifyUninstalled(S, BODY, sig, T + APP_SIGNATURE_TOLERANCE_S + 1), false)
+	assert.equal(verifyBotsToApp(S, BODY, sig, T), false)
+	assert.equal(verifyUninstalled(S, BODY, V_BOTS_TO_APP, T), false)
 })

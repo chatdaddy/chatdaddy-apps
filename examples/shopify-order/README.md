@@ -9,7 +9,7 @@ that formats an order confirmation message. Zero runtime dependencies; Node 22 E
 | Var | Required | Meaning |
 |---|---|---|
 | `WEBHOOK_SECRET_KEY` | yes | 32-byte key that seals each shop's Shopify webhook secret at rest (AES-256-GCM): 64 hex characters or base64. Generate one with `openssl rand -hex 32`. Keep it out of the data file's backups. Losing or changing it makes every stored webhook secret unreadable, and the admin has to paste them again |
-| `ADMIN_TOKEN` | yes | at least 24 characters; the bearer token the admin uses to paste a shop's webhook secret (see below). Generate one with `openssl rand -hex 32` |
+| `ADMIN_TOKEN` | yes | at least 24 characters. An operator-only credential for the person who runs this app; do not hand it to each team. It is the bearer token used to paste a shop's webhook secret (see below). Generate one with `openssl rand -hex 32` |
 | `CHATDADDY_BOTS_URL` | yes | bots base URL; triggers are POSTed to `{url}/apps/triggers/{installationId}/shopify-order-created` |
 | `PORT` | no | default 3000 |
 | `DATA_FILE` | no | installation store, default `./data/installations.json` (holds ChatDaddy signing secrets in plaintext and the Shopify webhook secrets sealed; mode 0600) |
@@ -35,11 +35,11 @@ Every installation has its own Shopify webhook secret, so one store's webhooks c
    - Event: `Order creation`
    - Format: `JSON`
    - URL: `https://<your-app-host>/shopify/webhook/<installationId>` (the installation id in the URL is what selects the secret; use the id of the installation that belongs to this shop)
-   - Save, then use "Send test notification". A 200 means the signature matched.
+   - Save, then use "Send test notification". A 401 means the signature did not match (or the installation id or secret is wrong); a 200 only means the request was accepted, which also happens for ignored topics and for orders with no phone number.
 
 Until step 1 is done every webhook for that installation is refused with 401. Another shop, another installation: repeat both steps with that installation's id.
 
-When the team uninstalls the app, ChatDaddy calls `POST /uninstalled` (signed like an action call), and the app deletes that installation's record: its signing secrets and its sealed Shopify secret. Remove the webhook in Shopify too; the app cannot do that for you.
+When the team uninstalls the app, ChatDaddy calls `POST /uninstalled` (signed by ChatDaddy under its own `uninstalled` label), and the app deletes that installation's record: its signing secrets and its sealed Shopify secret. Remove the webhook in Shopify too; the app cannot do that for you.
 
 ## Run / test
 
@@ -71,7 +71,7 @@ Source of truth: ChatDaddy's app signing and handshake contract, as implemented 
 - `POST /actions/{actionId}` (bots -> app). Headers `x-chatdaddy-signature` (bots-to-app) and `x-chatdaddy-installation`;
   verified over the raw body with that installation's secret(s). Unknown installation and bad signature both answer 401.
   Body `{ input, context, settings }`; the response body is the action output (`format-order-message` -> `{ message }`).
-- `POST /uninstalled` (bots -> app). Verified exactly like an action call (`x-chatdaddy-installation`, `x-chatdaddy-signature` over the raw body, that installation's secret). Success: the installation's record, sealed webhook secret included, is deleted and the reply is `{ ok: true }`. Unknown installation or bad signature: 401.
+- `POST /uninstalled` (bots -> app). Headers `x-chatdaddy-installation` and `x-chatdaddy-signature`, signed with that installation's secret under its own label: content `chatdaddy/v1/uninstalled.<t>.<body>`, same `t=<unix>,v1=<hex>` header and tolerance as the others, so an action call can never replay as an uninstall. The body must be `{ "event": "uninstalled", "installationId", "teamId", "appId" }` and its `installationId` must equal the header. Success: the installation's record, sealed webhook secret included, is deleted and the reply is `{ ok: true }`. Unknown installation, bad signature, wrong event or mismatched installation: 401.
 - `POST /installations/{installationId}/shopify-webhook-secret` (admin -> app). `Authorization: Bearer <ADMIN_TOKEN>` (constant-time compare), body `{ secret }` (8 to 256 printable characters, no spaces). The secret is sealed with AES-256-GCM, bound to the installation id, and never logged or returned.
 - `POST /shopify/webhook/{installationId}` (Shopify -> app). The secret is that installation's own. `X-Shopify-Hmac-Sha256` (base64 HMAC-SHA256 of the raw body, constant-time compare) is checked first; an unknown installation, an installation with no secret yet and a bad signature all get the same bare 401.
   Only `orders/create` is forwarded; orders with no phone or order number are acknowledged and skipped.

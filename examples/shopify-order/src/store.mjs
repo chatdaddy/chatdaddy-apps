@@ -9,7 +9,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { seal, unseal } from './seal.mjs'
 
-/** how long the old secret keeps verifying after a re-handshake (spec rev2 "Rotation") */
+/** how long the old secret keeps verifying after a re-handshake */
 export const PREVIOUS_SECRET_WINDOW_S = 15 * 60
 
 export class InstallationStore {

@@ -55,9 +55,15 @@ const MUTATIONS = [
 	M('config: installation need not exist', 'src/server.mjs', 'if(!UUID.test(installationId) || !store.get(installationId)) {', 'if(false) {'),
 	M('config: secret not validated', 'src/server.mjs', '|| !WEBHOOK_SECRET.test(secret)) {', ') {'),
 	M('store: re-handshake wipes the webhook secret', 'src/store.mjs', 'if(prev?.shopifyWebhookSecretSealed) {', 'if(false) {'),
-	M('uninstall: signature not verified', 'src/server.mjs', "async function uninstalled(req) {\n\t\tconst raw = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs)\n\t\tconst installationId = `${req.headers['x-chatdaddy-installation'] || ''}`\n\t\tconst secrets = store.secretsFor(installationId, now())\n\t\tif(!secrets.length || !verifyBotsToApp(secrets, raw.toString('utf8'), req.headers['x-chatdaddy-signature'], now())) {", "async function uninstalled(req) {\n\t\tconst raw = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs)\n\t\tconst installationId = `${req.headers['x-chatdaddy-installation'] || ''}`\n\t\tconst secrets = store.secretsFor(installationId, now())\n\t\tif(!secrets.length) {"),
+	M('uninstall: signature not verified', 'src/server.mjs', "if(!secrets.length || !verifyUninstalled(secrets, raw.toString('utf8'), req.headers['x-chatdaddy-signature'], now())) {", 'if(!secrets.length) {'),
 	M('uninstall: deletes nothing', 'src/server.mjs', '\t\tawait store.deleteInstallation(installationId)\n', ''),
 	M('uninstall: deleted in memory only, not persisted', 'src/store.mjs', 'await this.#commit(installationId, undefined)', 'delete this.records[installationId]'),
+	M('uninstall: verified under the action label', 'src/server.mjs', '!verifyUninstalled(secrets', '!verifyBotsToApp(secrets'),
+	M('uninstall: label equals the action label', 'src/signing.mjs', "uninstalled: 'chatdaddy/v1/uninstalled'", "uninstalled: 'chatdaddy/v1/bots-to-app'"),
+	M('uninstall: event not required', 'src/server.mjs', "body?.event !== 'uninstalled' || ", ''),
+	M('uninstall: body installation not compared to the header', 'src/server.mjs', ' || body.installationId !== installationId) {', ') {'),
+	M('createApp: short admin token accepted', 'src/server.mjs', 'adminToken.length < ADMIN_TOKEN_MIN_LENGTH))', 'false))'),
+	M('config: body read before the token is checked', 'src/server.mjs', "		const auth = req.headers.authorization || ''\n		const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''\n		if(!adminToken || !tokenEquals(adminToken, token)) {\n			throw new HttpError(401, 'unauthorized')\n		}\n\n		const raw = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs)\n", "		const raw = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs)\n		const auth = req.headers.authorization || ''\n		const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''\n		if(!adminToken || !tokenEquals(adminToken, token)) {\n			throw new HttpError(401, 'unauthorized')\n		}\n"),
 ]
 
 function suite() {

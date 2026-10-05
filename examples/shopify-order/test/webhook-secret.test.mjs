@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { parseSealKey, seal, unseal } from '../src/seal.mjs'
-import { signBotsToApp } from '../src/signing.mjs'
+import { signBotsToApp, signUninstalled } from '../src/signing.mjs'
 import { InstallationStore } from '../src/store.mjs'
 import {
 	ADMIN_TOKEN, INST_A, INST_B, SAMPLE_ORDER, SEAL_KEY, SHOPIFY_SECRET_A, SHOPIFY_SECRET_B, shopifyHmac, startApp,
@@ -27,10 +27,11 @@ async function setup(overrides) {
 	const hook = (inst, secret, raw = RAW, extra = {}) => app.post(`/shopify/webhook/${inst}`, raw, {
 		'x-shopify-hmac-sha256': shopifyHmac(secret, raw), 'x-shopify-topic': 'orders/create', 'x-shopify-webhook-id': 'wh-1', ...extra,
 	})
-	const uninstall = (inst, signWith, body = '{}') => app.post('/uninstalled', body, {
-		'x-chatdaddy-installation': inst, 'x-chatdaddy-signature': signBotsToApp(signWith, body, app.clock.t),
+	const notice = inst => JSON.stringify({ event: 'uninstalled', installationId: inst, teamId: 'team-1', appId: 'shopify-order-whatsapp' })
+	const uninstall = (inst, signWith, body = notice(inst)) => app.post('/uninstalled', body, {
+		'x-chatdaddy-installation': inst, 'x-chatdaddy-signature': signUninstalled(signWith, body, app.clock.t),
 	})
-	return { app, hook, uninstall }
+	return { app, hook, uninstall, notice }
 }
 
 test('each store verifies with its own secret and is forwarded under its own installation', async() => {
@@ -186,18 +187,74 @@ test('uninstall deletes the installation and its sealed webhook secret, on disk 
 })
 
 test('uninstall needs the installation\'s own ChatDaddy signature: bad, other-store, stale, unsigned and unknown all -> 401, nothing deleted', async() => {
-	const { app, hook, uninstall } = await setup()
+	const { app, hook, uninstall, notice } = await setup()
 	try {
+		const body = notice(INST_A)
+		const post = headers => app.post('/uninstalled', body, headers)
 		assert.equal((await uninstall(INST_A, 'wrong')).status, 401)
 		assert.equal((await uninstall(INST_A, SIGNING_B)).status, 401) // B's secret cannot uninstall A
-		assert.equal((await app.post('/uninstalled', '{}', { 'x-chatdaddy-installation': INST_A })).status, 401)
-		assert.equal((await app.post('/uninstalled', '{}')).status, 401)
-		const stale = signBotsToApp(SIGNING_A, '{}', app.clock.t - 3600)
-		assert.equal((await app.post('/uninstalled', '{}', { 'x-chatdaddy-installation': INST_A, 'x-chatdaddy-signature': stale })).status, 401)
-		const forBody = signBotsToApp(SIGNING_A, '{}', app.clock.t)
-		assert.equal((await app.post('/uninstalled', '{"x":1}', { 'x-chatdaddy-installation': INST_A, 'x-chatdaddy-signature': forBody })).status, 401)
+		assert.equal((await post({ 'x-chatdaddy-installation': INST_A })).status, 401)
+		assert.equal((await app.post('/uninstalled', body)).status, 401)
+		const stale = signUninstalled(SIGNING_A, body, app.clock.t - 3600)
+		assert.equal((await post({ 'x-chatdaddy-installation': INST_A, 'x-chatdaddy-signature': stale })).status, 401)
+		const forBody = signUninstalled(SIGNING_A, body, app.clock.t)
+		assert.equal((await app.post('/uninstalled', body + ' ', { 'x-chatdaddy-installation': INST_A, 'x-chatdaddy-signature': forBody })).status, 401)
 		assert.equal((await uninstall('55555555-5555-4555-8555-555555555555', SIGNING_A)).status, 401)
 		assert.equal((await hook(INST_A, SHOPIFY_SECRET_A)).status, 200, 'A is still installed with its secret')
+	} finally {
+		await app.close()
+	}
+})
+
+test('a real signed action call replayed to /uninstalled -> 401, and an uninstall signature on an action route -> 401', async() => {
+	const { app, hook, notice } = await setup()
+	try {
+		// the action body and signature exactly as ChatDaddy would send them for A
+		const actionBody = JSON.stringify({ input: { orderId: '1' }, context: { installationId: INST_A }, settings: {} })
+		const actionSig = signBotsToApp(SIGNING_A, actionBody, app.clock.t)
+		const act = await app.post('/actions/format-order-message', actionBody, { 'x-chatdaddy-installation': INST_A, 'x-chatdaddy-signature': actionSig })
+		assert.equal(act.status, 200, 'the action call is genuine')
+		assert.equal((await app.post('/uninstalled', actionBody, { 'x-chatdaddy-installation': INST_A, 'x-chatdaddy-signature': actionSig })).status, 401)
+		// even a notice-shaped body signed under the action label is refused
+		const body = notice(INST_A)
+		const asAction = signBotsToApp(SIGNING_A, body, app.clock.t)
+		assert.equal((await app.post('/uninstalled', body, { 'x-chatdaddy-installation': INST_A, 'x-chatdaddy-signature': asAction })).status, 401)
+		// and the reverse: an uninstall signature does not open an action
+		const sig = signUninstalled(SIGNING_A, actionBody, app.clock.t)
+		assert.equal((await app.post('/actions/format-order-message', actionBody, { 'x-chatdaddy-installation': INST_A, 'x-chatdaddy-signature': sig })).status, 401)
+		assert.equal((await hook(INST_A, SHOPIFY_SECRET_A)).status, 200, 'nothing was deleted')
+	} finally {
+		await app.close()
+	}
+})
+
+test('a correctly signed uninstall body must say event=uninstalled and name the header installation', async() => {
+	const { app, hook, uninstall } = await setup()
+	try {
+		const n = o => JSON.stringify({ event: 'uninstalled', installationId: INST_A, ...o })
+		assert.equal((await uninstall(INST_A, SIGNING_A, n({ installationId: INST_B }))).status, 401, 'names another installation')
+		assert.equal((await uninstall(INST_A, SIGNING_A, n({ installationId: undefined }))).status, 401, 'names none')
+		assert.equal((await uninstall(INST_A, SIGNING_A, n({ event: 'installed' }))).status, 401, 'wrong event')
+		assert.equal((await uninstall(INST_A, SIGNING_A, n({ event: undefined }))).status, 401, 'no event')
+		assert.equal((await uninstall(INST_A, SIGNING_A, '{}')).status, 401)
+		assert.equal((await uninstall(INST_A, SIGNING_A, 'not json')).status, 401)
+		assert.equal((await uninstall(INST_A, SIGNING_A, '[]')).status, 401)
+		assert.equal((await hook(INST_A, SHOPIFY_SECRET_A)).status, 200, 'nothing was deleted')
+		assert.equal((await uninstall(INST_A, SIGNING_A, n({}))).status, 200)
+	} finally {
+		await app.close()
+	}
+})
+
+test('createApp refuses a short admin token; the config route checks the token before reading the body', async() => {
+	await assert.rejects(startApp({ adminToken: 'short' }), /at least 24/)
+	const app = await startApp()
+	try {
+		const big = 'x'.repeat(70 * 1024) // over the body cap: an unauthenticated caller must get 401, not 413
+		const res = await app.post(`/installations/${INST_A}/shopify-webhook-secret`, big)
+		assert.equal(res.status, 401)
+		const authed = await app.post(`/installations/${INST_A}/shopify-webhook-secret`, big, { authorization: `Bearer ${ADMIN_TOKEN}` })
+		assert.equal(authed.status, 413)
 	} finally {
 		await app.close()
 	}

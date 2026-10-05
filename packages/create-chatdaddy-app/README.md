@@ -54,10 +54,10 @@ The scaffold contains:
 
 The scaffold does not receive webhooks from third parties. If your app does (a Shopify store, a payment provider), do not use one secret for every installation:
 
-- give each installation its own webhook URL (`/webhooks/<service>/{installationId}`) and look the signing secret up by that id, so one customer's webhook can never be checked with another customer's secret;
+- give each installation its own webhook URL (`/shopify/webhook/{installationId}` (the example's pattern; use your service's name)) and look the signing secret up by that id, so one customer's webhook can never be checked with another customer's secret;
 - let the team admin paste the service's signing secret for that installation, and seal it at rest (AES-256-GCM, key from an environment variable); never log it or return it from a route;
 - verify the signature over the raw request bytes with a constant-time compare, and answer an unknown installation and a bad signature with the same bare 401;
-- delete the stored secret when ChatDaddy calls `POST /uninstalled` (signed like an action call, with the installation's signing secret).
+- delete the stored secret when ChatDaddy calls `POST /uninstalled` (signed with the installation's signing secret under its own `uninstalled` label; the template's `src/signing.mjs` has `verifyUninstalled`).
 
 `examples/shopify-order` does all of this; start from its `src/seal.mjs`, `src/store.mjs` and `src/server.mjs`.
 

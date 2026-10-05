@@ -1,6 +1,6 @@
 import { CHATDADDY_PUBLIC_KEY } from './jwt.mjs'
 import { parseSealKey } from './seal.mjs'
-import { createApp } from './server.mjs'
+import { ADMIN_TOKEN_MIN_LENGTH, createApp } from './server.mjs'
 import { InstallationStore } from './store.mjs'
 
 // structured JSON lines on stdout/stderr; never log request bodies or secrets
@@ -27,8 +27,8 @@ if(!sealKey) {
 }
 
 const adminToken = need('ADMIN_TOKEN')
-if(adminToken.length < 24) {
-	log('error', 'ADMIN_TOKEN must be at least 24 characters')
+if(adminToken.length < ADMIN_TOKEN_MIN_LENGTH) {
+	log('error', `ADMIN_TOKEN must be at least ${ADMIN_TOKEN_MIN_LENGTH} characters`)
 	process.exit(1)
 }
 
