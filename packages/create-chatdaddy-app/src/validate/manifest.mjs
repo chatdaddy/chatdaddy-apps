@@ -2,9 +2,11 @@
 //  1. the JSON Schema (schema.mjs, run by engine.mjs): shapes, required fields, https
 //  2. semantic checks a schema cannot express: scope names that exist and are
 //     app-grantable, event names that exist, unique ids inside each array, and no
-//     private/loopback hosts.
+//     private/loopback hosts, and the connection rules (host templates, inputs, the oauth2
+//     host tie, the header floor).
 // Both layers always run and their errors are combined.
 import { readFileSync } from 'node:fs'
+import { validateConnections } from './connections.mjs'
 import { validate } from './engine.mjs'
 import { isPrivateOrLoopbackHost } from './hosts.mjs'
 import { APP_MANIFEST_SCHEMA } from './schema.mjs'
@@ -82,7 +84,10 @@ export function validateManifest(manifest) {
 		urlChecks.push({ path: `/connections/${i}/authUrl`, value: connection.authUrl })
 		urlChecks.push({ path: `/connections/${i}/tokenUrl`, value: connection.tokenUrl })
 		for(const [j, host] of asArray(connection.hosts).entries()) {
-			urlChecks.push({ path: `/connections/${i}/hosts/${j}`, value: host })
+			// host templates are checked by validateConnections (suffix only)
+			if(typeof host === 'string' && !host.includes('{') && !host.includes('}')) {
+				urlChecks.push({ path: `/connections/${i}/hosts/${j}`, value: host })
+			}
 		}
 	}
 
@@ -95,6 +100,9 @@ export function validateManifest(manifest) {
 			errors.push({ path, message: `${path}: private/loopback hosts are not allowed ("${value}")` })
 		}
 	}
+
+	// --- connections: host templates, inputs, oauth2 host tie, header floor ---
+	validateConnections(m.connections, errors)
 
 	// --- unique ids within each array ---
 	const ids = (arr, key) => items(arr).map(x => x[key]).filter(Boolean)

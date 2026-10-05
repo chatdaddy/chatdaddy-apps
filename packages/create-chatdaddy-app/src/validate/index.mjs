@@ -1,4 +1,6 @@
 export { validateManifest, CATALOGUE_SOURCE } from './manifest.mjs'
-export { isPrivateOrLoopbackHost } from './hosts.mjs'
+export { isPrivateOrLoopbackHost, isValidHostLabel } from './hosts.mjs'
+export { isPublicSuffix, publicSuffixSection, PUBLIC_SUFFIX_SOURCE } from './public-suffix.mjs'
+export { headerNameProblem, TENANT_SUFFIX_ALLOWLIST } from './connections.mjs'
 export { APP_MANIFEST_SCHEMA } from './schema.mjs'
 export { validate, unsupportedKeywords, KEYWORDS, ANNOTATIONS } from './engine.mjs'

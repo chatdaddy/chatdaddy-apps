@@ -2,7 +2,7 @@
 // from ChatDaddy's validator; engine.mjs implements exactly the
 // keywords used here (see KEYWORDS in engine.mjs). Checks that need data outside
 // the manifest (scope and event names, cross-field uniqueness, private hosts) are in
-// manifest.mjs.
+// manifest.mjs and connections.mjs.
 
 const idPattern = '^[a-z0-9]+(-[a-z0-9]+)*$'
 
@@ -90,10 +90,22 @@ const appHandler = {
 	],
 }
 
+const appConnectionInput = {
+	type: 'object',
+	additionalProperties: false,
+	required: ['id', 'label'],
+	properties: {
+		id: { type: 'string', pattern: idPattern, maxLength: 64 },
+		label: { type: 'string', minLength: 1, maxLength: 64 },
+		// advisory: connections.mjs checks that it compiles; the server enforces its own label rule
+		pattern: { type: 'string', minLength: 1, maxLength: 200 },
+	},
+}
+
 const appConnection = {
 	type: 'object',
 	additionalProperties: false,
-	required: ['id', 'provider', 'type', 'authUrl', 'tokenUrl', 'scopes', 'hosts'],
+	required: ['id', 'provider', 'type', 'scopes', 'hosts'],
 	properties: {
 		id: { type: 'string', pattern: idPattern, maxLength: 64 },
 		provider: { type: 'string', minLength: 1, maxLength: 64 },
@@ -102,7 +114,23 @@ const appConnection = {
 		tokenUrl: httpsUrl,
 		scopes: { type: 'array', items: { type: 'string', minLength: 1 } },
 		hosts: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1, maxLength: 256 } },
+		inputs: { type: 'array', maxItems: 3, items: appConnectionInput },
+		headerName: { type: 'string', minLength: 1, maxLength: 128 },
+		headerPrefix: { type: 'string', maxLength: 64 },
+		forwardHeaders: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 128 } },
 	},
+	allOf: [
+		// apiKey: the credential's header is required; authUrl/tokenUrl are not
+		{
+			if: { required: ['type'], properties: { type: { const: 'apiKey' } } },
+			then: { required: ['headerName'] },
+		},
+		// oauth2: both endpoints are required
+		{
+			if: { required: ['type'], properties: { type: { const: 'oauth2' } } },
+			then: { required: ['authUrl', 'tokenUrl'] },
+		},
+	],
 }
 
 const appFlowAction = {

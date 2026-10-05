@@ -7,7 +7,7 @@
 //   $ref (local "#/..." only)   type (string number boolean array object; also integer, null
 //   and a list of types, for developers' own schemas)
 //   const   enum   pattern (unicode flag, as ajv)   minLength   maxLength (code points)
-//   minItems   required   properties   additionalProperties (false, or a schema)
+//   minItems   maxItems   required   properties   additionalProperties (false, or a schema)
 //   items (single schema)   oneOf   allOf   if + then   format (uri, email)
 // Annotations that are read and ignored (ANNOTATIONS): $schema $id title description
 //   definitions default examples $comment.
@@ -16,7 +16,7 @@
 import { FORMATS } from './formats.mjs'
 
 export const KEYWORDS = [
-	'$ref', 'type', 'const', 'enum', 'pattern', 'minLength', 'maxLength', 'minItems', 'required',
+	'$ref', 'type', 'const', 'enum', 'pattern', 'minLength', 'maxLength', 'minItems', 'maxItems', 'required',
 	'properties', 'additionalProperties', 'items', 'oneOf', 'allOf', 'if', 'then', 'format',
 ]
 export const ANNOTATIONS = ['$schema', '$id', 'title', 'description', 'definitions', 'default', 'examples', '$comment']
@@ -114,6 +114,10 @@ function check(schema, data, path, root, errors) {
 	if(Array.isArray(data)) {
 		if(schema.minItems !== undefined && data.length < schema.minItems) {
 			fail(`must NOT have fewer than ${schema.minItems} items`)
+		}
+
+		if(schema.maxItems !== undefined && data.length > schema.maxItems) {
+			fail(`must NOT have more than ${schema.maxItems} items`)
 		}
 
 		if(schema.items) {
