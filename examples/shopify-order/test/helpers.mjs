@@ -3,7 +3,10 @@ import { createApp } from '../src/server.mjs'
 import { InstallationStore } from '../src/store.mjs'
 
 export const APP_ID = 'shopify-order-whatsapp'
-export const SHOPIFY_SECRET = 'shpss_test_webhook_secret'
+export const SHOPIFY_SECRET_A = 'shpss_test_webhook_secret_store_a'
+export const SHOPIFY_SECRET_B = 'shpss_test_webhook_secret_store_b'
+export const ADMIN_TOKEN = 'test-admin-token-0123456789abcdef'
+export const SEAL_KEY = Buffer.alloc(32, 7)
 export const BOTS_URL = 'https://bots.test.invalid'
 export const INST_A = '11111111-1111-4111-8111-111111111111'
 export const INST_B = '22222222-2222-4222-8222-222222222222'
@@ -39,7 +42,7 @@ export const shopifyHmac = (secret, raw) => createHmac('sha256', secret).update(
 
 /** boots the app on an ephemeral port with a recording fake fetch */
 export async function startApp(overrides = {}) {
-	const store = new InstallationStore(undefined)
+	const store = new InstallationStore(undefined, { sealKey: SEAL_KEY })
 	const clock = { t: nowS() }
 	const calls = []
 	const state = { response: () => new Response('{"fired":1}', { status: 202 }), throwError: undefined }
@@ -53,7 +56,7 @@ export async function startApp(overrides = {}) {
 	}
 
 	const server = createApp({
-		appId: APP_ID, publicKey: pem(chatdaddyKeys), store, shopifyWebhookSecret: SHOPIFY_SECRET,
+		appId: APP_ID, publicKey: pem(chatdaddyKeys), store, adminToken: ADMIN_TOKEN,
 		botsUrl: BOTS_URL, fetch: fakeFetch, now: () => clock.t, ...overrides,
 	})
 	await new Promise(r => server.listen(0, '127.0.0.1', r))
@@ -77,7 +80,12 @@ export async function startApp(overrides = {}) {
 		body || { installationId, teamId: TEAM, appId: APP_ID, appVersion: '1.0.0', grantedScopes: ['ACCOUNT_READ'], signingSecret: secret, nonce },
 		{ authorization: `Bearer ${token ?? mintToken({ installationId })}` }
 	)
-	return { base, store, clock, calls, state, post, handshake, close: () => { server.closeAllConnections(); return new Promise(r => server.close(r)) } }
+	/** the admin pastes the shop's webhook secret for an installation */
+	const setWebhookSecret = (installationId, secret, token = ADMIN_TOKEN) => post(
+		`/installations/${installationId}/shopify-webhook-secret`, { secret },
+		token === null ? {} : { authorization: `Bearer ${token}` }
+	)
+	return { base, store, setWebhookSecret, clock, calls, state, post, handshake, close: () => { server.closeAllConnections(); return new Promise(r => server.close(r)) } }
 }
 
 export const SAMPLE_ORDER = {

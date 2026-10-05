@@ -24,7 +24,7 @@ const ITEMS_SUMMARY_MAX = 2000
 /**
  * Maps a Shopify orders/create payload to the flow trigger payload declared in
  * chatdaddy-app.json (flowTriggers[].payloadSchema). Field sources follow the
- * built-in shopify trigger in bots (internal-apps/shopify.ts).
+ * ChatDaddy's built-in Shopify trigger.
  * @returns the payload, or undefined when there is no order id or no phone
  */
 export function mapOrder(order) {

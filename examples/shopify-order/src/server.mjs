@@ -1,11 +1,13 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { ACTIONS } from './actions.mjs'
 import { tokenMatchesInstall, verifyEs256 } from './jwt.mjs'
 import { TRIGGER_ID, mapOrder, verifyShopifyHmac } from './shopify.mjs'
-import { computeHandshakeAck, isValidEventId, signAppToBots, verifyBotsToApp } from './signing.mjs'
+import { computeHandshakeAck, isValidEventId, signAppToBots, verifyBotsToApp, verifyUninstalled } from './signing.mjs'
 
 export const MAX_BODY_BYTES = 64 * 1024 // handshake / action calls, and bots' trigger cap
 export const MAX_SHOPIFY_BODY_BYTES = 1024 * 1024
+export const ADMIN_TOKEN_MIN_LENGTH = 24
 const OUTBOUND_TIMEOUT_MS = 10_000
 // a request body must arrive within this; a slow drip can't hold a socket and buffers
 export const BODY_TIMEOUT_MS = 10_000
@@ -48,6 +50,16 @@ async function readBody(req, limit, timeoutMs = BODY_TIMEOUT_MS) {
 	return Buffer.concat(chunks)
 }
 
+const sha256 = v => createHash('sha256').update(`${v}`).digest()
+// compares digests, so neither the length nor a prefix of the token leaks through timing
+const tokenEquals = (expected, given) => timingSafeEqual(sha256(expected), sha256(given))
+// 8..256 chars, no whitespace or control characters (Shopify's are hex or shpss_-prefixed)
+const WEBHOOK_SECRET = /^[\x21-\x7e]{8,256}$/
+// An unknown or secretless installation is still checked against this stand-in, so a miss runs
+// the same HMAC as a hit. That narrows, not removes, timing differences: the lookup and
+// unsealing a real installation does still differ. The stand-in can never pass (see `known &&`).
+const DUMMY_SECRET = 'unconfigured-installation-placeholder'
+
 const parseJson = raw => {
 	try {
 		return JSON.parse(raw.toString('utf8'))
@@ -61,13 +73,17 @@ const parseJson = raw => {
  * @param {string} deps.appId this app's manifest id
  * @param {string} deps.publicKey PEM, ChatDaddy's ES256 key in production
  * @param {import('./store.mjs').InstallationStore} deps.store
- * @param {string} deps.shopifyWebhookSecret
+ * @param {string} [deps.adminToken] bearer token for the webhook-secret config route; unset disables it
  * @param {string} deps.botsUrl CHATDADDY_BOTS_URL
  * @param {typeof fetch} [deps.fetch]
  * @param {() => number} [deps.now] unix seconds
  */
 export function createApp(deps) {
-	const { appId, publicKey, store, shopifyWebhookSecret, botsUrl } = deps
+	const { appId, publicKey, store, adminToken, botsUrl } = deps
+	if(adminToken !== undefined && (typeof adminToken !== 'string' || adminToken.length < ADMIN_TOKEN_MIN_LENGTH)) {
+		throw new Error(`adminToken must be at least ${ADMIN_TOKEN_MIN_LENGTH} characters`)
+	}
+
 	const doFetch = deps.fetch || fetch
 	const now = deps.now || (() => Math.floor(Date.now() / 1000))
 	const bodyTimeoutMs = deps.bodyTimeoutMs || BODY_TIMEOUT_MS
@@ -133,17 +149,18 @@ export function createApp(deps) {
 	// POST /shopify/webhook/:installationId
 	async function shopifyWebhook(req, installationId) {
 		const raw = await readBody(req, MAX_SHOPIFY_BODY_BYTES, bodyTimeoutMs)
-		if(!verifyShopifyHmac(shopifyWebhookSecret, raw, req.headers['x-shopify-hmac-sha256'])) {
-			throw new HttpError(401, 'invalid signature')
+		// the secret is looked up by the installation in the URL and nothing else, so a
+		// webhook for store A can only ever be checked against store A's secret.
+		// Unknown installation, no secret yet and bad signature are one answer.
+		const known = UUID.test(installationId) ? store.webhookSecretFor(installationId) : undefined
+		const verified = verifyShopifyHmac(known || DUMMY_SECRET, raw, req.headers['x-shopify-hmac-sha256'])
+		const secret = known && verified ? store.currentSecret(installationId) : undefined
+		if(!secret) {
+			throw new HttpError(401, 'unauthorized')
 		}
 
 		if(req.headers['x-shopify-topic'] !== 'orders/create') {
 			return { status: 200, body: { ignored: 'topic' } }
-		}
-
-		const secret = UUID.test(installationId) ? store.currentSecret(installationId) : undefined
-		if(!secret) {
-			throw new HttpError(404, 'unknown installation')
 		}
 
 		// Shopify retries reuse X-Shopify-Webhook-Id, so bots de-dupes on it
@@ -191,6 +208,52 @@ export function createApp(deps) {
 		return { status: 200, body: { forwarded: true } }
 	}
 
+	// POST /installations/:installationId/shopify-webhook-secret
+	// The team admin (who runs this app) pastes the shop's webhook signing secret here.
+	async function setWebhookSecret(req, installationId) {
+		const auth = req.headers.authorization || ''
+		const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+		if(!adminToken || !tokenEquals(adminToken, token)) {
+			throw new HttpError(401, 'unauthorized')
+		}
+
+		const raw = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs)
+		if(!UUID.test(installationId) || !store.get(installationId)) {
+			throw new HttpError(404, 'unknown installation')
+		}
+
+		const secret = parseJson(raw)?.secret
+		if(typeof secret !== 'string' || !WEBHOOK_SECRET.test(secret)) {
+			throw new HttpError(400, 'invalid secret')
+		}
+
+		await store.setWebhookSecret(installationId, secret)
+		return { status: 200, body: { ok: true } } // never echoes the secret
+	}
+
+	// POST /uninstalled: signed by ChatDaddy with the installation's signing secret under its OWN
+	// label (never the action label), and the signed body must name this installation
+	async function uninstalled(req) {
+		const raw = await readBody(req, MAX_BODY_BYTES, bodyTimeoutMs)
+		const installationId = `${req.headers['x-chatdaddy-installation'] || ''}`
+		const secrets = store.secretsFor(installationId, now())
+		if(!secrets.length || !verifyUninstalled(secrets, raw.toString('utf8'), req.headers['x-chatdaddy-signature'], now())) {
+			throw new HttpError(401, 'invalid signature')
+		}
+
+		let body
+		try {
+			body = JSON.parse(raw.toString('utf8'))
+		} catch{}
+
+		if(body?.event !== 'uninstalled' || body.installationId !== installationId) {
+			throw new HttpError(401, 'invalid signature')
+		}
+
+		await store.deleteInstallation(installationId)
+		return { status: 200, body: { ok: true } }
+	}
+
 	async function route(req) {
 		const url = new URL(req.url || '/', 'http://x')
 		const path = url.pathname
@@ -205,6 +268,14 @@ export function createApp(deps) {
 		let m
 		if(path === '/installed') {
 			return handshake(req)
+		}
+
+		if(path === '/uninstalled') {
+			return uninstalled(req)
+		}
+
+		if((m = /^\/installations\/([^/]+)\/shopify-webhook-secret$/.exec(path))) {
+			return setWebhookSecret(req, decodeURIComponent(m[1]))
 		}
 
 		if((m = /^\/actions\/([^/]+)$/.exec(path))) {
