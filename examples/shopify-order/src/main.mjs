@@ -1,4 +1,5 @@
 import { CHATDADDY_PUBLIC_KEY } from './jwt.mjs'
+import { parseSealKey } from './seal.mjs'
 import { createApp } from './server.mjs'
 import { InstallationStore } from './store.mjs'
 
@@ -18,12 +19,25 @@ const need = name => {
 	return v
 }
 
-const store = await new InstallationStore(process.env.DATA_FILE || './data/installations.json').load()
+// never print the key or the token, only that one is missing or malformed
+const sealKey = parseSealKey(need('WEBHOOK_SECRET_KEY'))
+if(!sealKey) {
+	log('error', 'WEBHOOK_SECRET_KEY must be 32 bytes: 64 hex characters or base64')
+	process.exit(1)
+}
+
+const adminToken = need('ADMIN_TOKEN')
+if(adminToken.length < 24) {
+	log('error', 'ADMIN_TOKEN must be at least 24 characters')
+	process.exit(1)
+}
+
+const store = await new InstallationStore(process.env.DATA_FILE || './data/installations.json', { sealKey }).load()
 const server = createApp({
 	appId: process.env.APP_ID || 'shopify-order-whatsapp',
 	publicKey: process.env.CHATDADDY_PUBLIC_KEY || CHATDADDY_PUBLIC_KEY,
 	store,
-	shopifyWebhookSecret: need('SHOPIFY_WEBHOOK_SECRET'),
+	adminToken,
 	botsUrl: need('CHATDADDY_BOTS_URL'),
 })
 const port = Number(process.env.PORT || 3000)

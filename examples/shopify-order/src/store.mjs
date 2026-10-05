@@ -1,17 +1,25 @@
 // JSON-file installation store. One record per installation:
-// { installationId, teamId, appId, signingSecret, previousSecret?, previousSecretExpiresAt? }
-// Writes are atomic (tmp + rename) and serialised. Secrets are plaintext on disk:
-// protect the file (mode 0600) and the directory.
+// { installationId, teamId, appId, signingSecret, previousSecret?, previousSecretExpiresAt?,
+//   shopifyWebhookSecretSealed? }
+// Writes are atomic (tmp + rename) and serialised. The ChatDaddy signing secrets are
+// plaintext on disk: protect the file (mode 0600) and the directory. The shop's Shopify
+// webhook secret is sealed (AES-256-GCM, see seal.mjs) and only ever read back through
+// webhookSecretFor(), which no route returns.
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { seal, unseal } from './seal.mjs'
 
 /** how long the old secret keeps verifying after a re-handshake (spec rev2 "Rotation") */
 export const PREVIOUS_SECRET_WINDOW_S = 15 * 60
 
 export class InstallationStore {
-	/** @param {string | undefined} file path; undefined keeps it in memory only */
-	constructor(file) {
+	/**
+	 * @param {string | undefined} file path; undefined keeps it in memory only
+	 * @param {{ sealKey?: Buffer }} [opts] 32-byte key that seals the Shopify webhook secrets
+	 */
+	constructor(file, { sealKey } = {}) {
 		this.file = file
+		this.sealKey = sealKey
 		this.records = {}
 		this.queue = Promise.resolve()
 	}
@@ -60,6 +68,11 @@ export class InstallationStore {
 	async saveHandshake({ installationId, teamId, appId, signingSecret }, nowS) {
 		const prev = this.get(installationId)
 		const rec = { installationId, teamId, appId, signingSecret }
+		if(prev?.shopifyWebhookSecretSealed) {
+			// a re-handshake (rotation) must not wipe the shop's webhook secret
+			rec.shopifyWebhookSecretSealed = prev.shopifyWebhookSecretSealed
+		}
+
 		if(prev && prev.signingSecret !== signingSecret) {
 			rec.previousSecret = prev.signingSecret
 			rec.previousSecretExpiresAt = nowS + PREVIOUS_SECRET_WINDOW_S
@@ -69,11 +82,48 @@ export class InstallationStore {
 			rec.previousSecretExpiresAt = prev.previousSecretExpiresAt
 		}
 
-		this.records[installationId] = rec
+		await this.#commit(installationId, rec)
+	}
+
+	/** seal and store the shop's Shopify webhook secret on an existing installation */
+	async setWebhookSecret(installationId, secret) {
+		const prev = this.get(installationId)
+		if(!prev) {
+			throw new Error('unknown installation')
+		}
+
+		if(!this.sealKey) {
+			throw new Error('no seal key configured')
+		}
+
+		await this.#commit(installationId, {
+			...prev, shopifyWebhookSecretSealed: seal(this.sealKey, secret, installationId),
+		})
+	}
+
+	/** the unsealed Shopify webhook secret, or undefined (none set, unknown installation, unreadable) */
+	webhookSecretFor(installationId) {
+		const sealed = this.get(installationId)?.shopifyWebhookSecretSealed
+		return sealed && this.sealKey ? unseal(this.sealKey, sealed, installationId) : undefined
+	}
+
+	/** uninstall: drop the whole record, signing secrets and sealed webhook secret included */
+	async deleteInstallation(installationId) {
+		await this.#commit(installationId, undefined)
+	}
+
+	// memory and disk move together: a failed write puts the old record back and rethrows
+	async #commit(installationId, rec) {
+		const prev = this.get(installationId)
+		if(rec) {
+			this.records[installationId] = rec
+		} else {
+			delete this.records[installationId]
+		}
+
 		try {
 			await this.#persist()
 		} catch(err) {
-			// keep memory and disk in step: the handshake fails and ChatDaddy retries it
 			if(prev) {
 				this.records[installationId] = prev
 			} else {
