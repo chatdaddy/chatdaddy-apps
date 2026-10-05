@@ -1,0 +1,11 @@
+{
+  "name": "chatdaddy-apps",
+  "private": true,
+  "description": "Build apps for ChatDaddy: the builder kit and example apps. No dependencies.",
+  "workspaces": ["packages/*"],
+  "bin": { "create-chatdaddy-app": "packages/create-chatdaddy-app/bin/create-chatdaddy-app.mjs" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "npm test --workspaces --if-present"
+  }
+}
