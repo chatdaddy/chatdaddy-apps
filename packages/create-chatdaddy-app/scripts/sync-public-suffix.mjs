@@ -17,9 +17,11 @@ const out = fileURLToPath(new URL('../src/data/public-suffix.json', import.meta.
 /** Lowercase punycode form of one rule: `*.` and `!` markers kept, other labels converted. */
 export function normaliseRule(rule) {
 	const marker = rule.startsWith('!') ? '!' : ''
-	const labels = rule.slice(marker.length).split('.').map(l => (l === '*' ? l : domainToASCII(l)))
-	if(labels.some(l => !l)) {
-		throw new Error(`cannot convert rule to ASCII: ${rule}`)
+	const raw = rule.slice(marker.length).split('.')
+	const labels = raw.map(l => (l === '*' ? l : domainToASCII(l)))
+	const bad = labels.findIndex(l => !l)
+	if(bad !== -1) {
+		throw new Error(`cannot convert label '${raw[bad]}' of rule to ASCII: ${rule}`)
 	}
 
 	return marker + labels.join('.')
