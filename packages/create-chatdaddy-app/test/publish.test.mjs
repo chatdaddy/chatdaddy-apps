@@ -119,3 +119,38 @@ test('publish: needs a token and a version; refuses a non-https appstore URL', a
 	assert.equal(r.code, 2)
 	assert.match(r.err, /must be https/)
 })
+
+test('publish: malformed CHATDADDY_APPSTORE_URL exits 2 with a clear message, no stack', async() => {
+	const r = await run(urlManifest, { env: { CHATDADDY_APPSTORE_URL: 'not a url' } })
+	assert.equal(r.code, 2)
+	assert.match(r.err, /not a valid URL/)
+	assert.ok(!r.err.includes(' at '))
+})
+
+test('publish: an invalid app id is refused locally, before any request', async() => {
+	const srv = await fake()
+	try {
+		const r = await run({ ...urlManifest, id: 'Bad Id/../x' }, { srv })
+		assert.equal(r.code, 1)
+		assert.equal(srv.calls.length, 0)
+	} finally {
+		await srv.stop()
+	}
+})
+
+test('publish: a redirect is not followed, so the token never reaches the target', async() => {
+	const hits = []
+	const target = createServer((req, res) => { hits.push(req.headers.authorization); res.end('{}') })
+	const targetUrl = await listen(target)
+	const redirector = createServer((req, res) => { res.writeHead(302, { location: `${targetUrl}/apps/my-app` }); res.end() })
+	const url = await listen(redirector)
+	try {
+		const r = await run(urlManifest, { srv: { url } })
+		assert.equal(r.code, 1)
+		assert.deepEqual(hits, [])
+		assert.ok(!r.err.includes(TOKEN))
+	} finally {
+		await close(redirector)
+		await close(target)
+	}
+})

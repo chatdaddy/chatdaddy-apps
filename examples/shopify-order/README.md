@@ -67,7 +67,7 @@ docker run -d --name shopify-order -p 3000:3000 \
 
 - Env vars: the table above. `DATA_FILE` is preset to `/data/installations.json`, `PORT` to 3000. `WEBHOOK_SECRET_KEY`, `ADMIN_TOKEN` and `CHATDADDY_BOTS_URL` are required; the container exits at start if they are missing.
 - Volume: mount persistent storage at `/data`. The installation store (ChatDaddy signing secrets, sealed Shopify secrets) lives there; without a volume every restart forgets every installation. Run a single instance: the store is one local file.
-- The container runs as the non-root `node` user; a mounted volume must be writable by uid 1000.
+- The container runs as the non-root `node` user; a mounted volume must be writable by uid 1000. The `chown` in the Dockerfile only applies to an empty, image-created `/data`; a pre-populated volume or bind mount keeps its own ownership, so `chown 1000:1000` it yourself.
 
 ## Publish
 

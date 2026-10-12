@@ -1,5 +1,6 @@
 // publish: register the app if new, then publish one immutable version, via appstore's
 // appGet / appCreate / appVersionCreate. The token's team becomes the app's team.
+// sync fs reads below are intentional: one small file in a one-shot CLI
 import { readFileSync, statSync } from 'node:fs'
 import { validateManifest } from './validate/index.mjs'
 
@@ -52,7 +53,15 @@ export async function publish({ file, baseUrl, version, env = process.env, fetch
 	}
 
 	const api = (env.CHATDADDY_APPSTORE_URL || DEFAULT_APPSTORE_URL).replace(/\/+$/, '')
-	const host = new URL(api)
+	let host
+	try {
+		host = new URL(api)
+	} catch{
+		err('CHATDADDY_APPSTORE_URL is not a valid URL')
+		return 2
+	}
+
+	// the token goes to this URL: https, or plain http only for exactly these local hosts
 	if(host.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(host.hostname)) {
 		err('CHATDADDY_APPSTORE_URL must be https (the token is sent to it)')
 		return 2
@@ -63,6 +72,7 @@ export async function publish({ file, baseUrl, version, env = process.env, fetch
 			method,
 			headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
 			body: body ? JSON.stringify(body) : undefined,
+			redirect: 'error', // a redirect must never carry the token elsewhere
 			signal: AbortSignal.timeout(30_000),
 		})
 		const text = await res.text()

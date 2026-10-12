@@ -235,4 +235,5 @@ export const MUTATIONS = [
 	M('cli: init failure exits 0', 'src/cli.mjs', "stderr(`error: ${err.message}`)\n\t\t\treturn 1", "stderr(`error: ${err.message}`)\n\t\t\treturn 0"),
 	M('cli: validate failure exits 0', 'src/cli.mjs', '\t\t\treturn 1\n\t\t}\n\n\t\tif(command === \'publish\') {', '\t\t\treturn 0\n\t\t}\n\n\t\tif(command === \'publish\') {'),
 	M('publish: invalid manifest still published', 'src/publish.mjs', 'if(!r.valid) {', 'if(false) {'),
+	M('publish: redirects followed with the token', 'src/publish.mjs', "redirect: 'error',", "redirect: 'follow',"),
 ]
