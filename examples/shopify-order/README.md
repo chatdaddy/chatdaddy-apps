@@ -49,13 +49,43 @@ npm test                 # node --test test/*.test.mjs
 npm run mutate           # mutation check: disables each guard, expects the suite to go red, restores
 ```
 
+## Deploy
+
+Runs on any container host. It needs **public HTTPS**: ChatDaddy calls `/installed`, `/actions/*` and `/uninstalled`, and Shopify calls `/shopify/webhook/*`, so terminate TLS in front of the container (your host's proxy or load balancer) and forward to port 3000. `GET /healthz` answers `{ "ok": true }` for health checks.
+
+```
+docker build -t app-shopify-order examples/shopify-order
+docker run -d --name shopify-order -p 3000:3000 \
+  -v shopify-order-data:/data \
+  -e WEBHOOK_SECRET_KEY="$(openssl rand -hex 32)" \
+  -e ADMIN_TOKEN="$(openssl rand -hex 32)" \
+  -e CHATDADDY_BOTS_URL="<bots base url>" \
+  app-shopify-order
+```
+
+(That generates the two secrets inline; for a real deploy generate them once, keep them in your host's secret store, and pass the same values on every restart.)
+
+- Env vars: the table above. `DATA_FILE` is preset to `/data/installations.json`, `PORT` to 3000. `WEBHOOK_SECRET_KEY`, `ADMIN_TOKEN` and `CHATDADDY_BOTS_URL` are required; the container exits at start if they are missing.
+- Volume: mount persistent storage at `/data`. The installation store (ChatDaddy signing secrets, sealed Shopify secrets) lives there; without a volume every restart forgets every installation. Run a single instance: the store is one local file.
+- The container runs as the non-root `node` user; a mounted volume must be writable by uid 1000.
+
+## Publish
+
+From the repo root, with a ChatDaddy token that has the `APPS_DEVELOP` scope (its team owns the app and installs it):
+
+```
+export CHATDADDY_TOKEN=...
+node packages/create-chatdaddy-app/bin/create-chatdaddy-app.mjs publish examples/shopify-order/chatdaddy-app.json \
+  --version 0.1.0 --base-url https://<your-app-host>
+```
+
+`--base-url` replaces `handler.baseUrl` for this publish, so the JSON is never edited by hand. Versions are immutable: a change means a new `--version`. The full go-live walkthrough is in [E2E.md](E2E.md).
+
 Validate the manifest with the builder kit, the same rules ChatDaddy applies when a version is published (from the repo root):
 
 ```
 node packages/create-chatdaddy-app/bin/create-chatdaddy-app.mjs validate examples/shopify-order/chatdaddy-app.json
 ```
-
-Set `handler.baseUrl` in `chatdaddy-app.json` to the real https URL before publishing.
 
 ## Contract
 

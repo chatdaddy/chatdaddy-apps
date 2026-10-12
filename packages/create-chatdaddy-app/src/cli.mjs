@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { runDev } from './dev/repl.mjs'
 import { InitError, init } from './init.mjs'
+import { publish } from './publish.mjs'
 import { CATALOGUE_SOURCE, validateManifest } from './validate/index.mjs'
 
 export const MAX_MANIFEST_BYTES = 1024 * 1024
@@ -16,6 +17,8 @@ usage:
       scaffold a working app in an empty directory
   create-chatdaddy-app validate [manifest.json]
       check a manifest the way ChatDaddy does when you publish (default: ./chatdaddy-app.json)
+  create-chatdaddy-app publish [manifest.json] --version <v> [--base-url https://...]
+      validate, register the app if new, and publish a version (needs CHATDADDY_TOKEN; --base-url sets handler.baseUrl)
   create-chatdaddy-app dev [--app http://localhost:3000] [--manifest chatdaddy-app.json]
                            [--port 4100] [--key-file .chatdaddy-dev/public-key.pem]
       stand in for ChatDaddy locally: install the app, call its actions, receive its triggers`
@@ -82,6 +85,17 @@ export async function main(argv, io = {}) {
 			}
 
 			return 1
+		}
+
+		if(command === 'publish') {
+			const { values, positionals } = parseArgs({
+				args: rest, allowPositionals: true,
+				options: { version: { type: 'string' }, 'base-url': { type: 'string' } },
+			})
+			return publish({
+				file: positionals[0] || 'chatdaddy-app.json', baseUrl: values['base-url'], version: values.version,
+				out: stdout, err: stderr,
+			})
 		}
 
 		if(command === 'dev') {
