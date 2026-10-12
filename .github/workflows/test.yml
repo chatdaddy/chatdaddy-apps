@@ -12,6 +12,7 @@ jobs:
           - packages/create-chatdaddy-app
           - packages/create-chatdaddy-app/template
           - examples/shopify-order
+          - apps/shopify
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

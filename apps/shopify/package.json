@@ -1,0 +1,12 @@
+{
+  "name": "chatdaddy-shopify",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ChatDaddy for Shopify: order updates and abandoned-cart recovery on WhatsApp. Zero runtime dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
