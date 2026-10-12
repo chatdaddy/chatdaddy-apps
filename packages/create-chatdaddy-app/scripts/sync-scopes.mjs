@@ -4,7 +4,11 @@
 //
 //   node scripts/sync-scopes.mjs                       fetch from GitHub (branch main)
 //   node scripts/sync-scopes.mjs --ref <branch|sha>    fetch another ref
-//   node scripts/sync-scopes.mjs --local <clone-dir>   read a local clone instead (no network)
+//   node scripts/sync-scopes.mjs --local <clone-dir>   read a typescript-client clone instead (no network)
+//   node scripts/sync-scopes.mjs --openapi <clone-dir> [--openapi-ref origin/main]
+//       take ONLY the scopes from a local chatdaddy/openapi clone (private repo, artifacts/scopes.json at
+//       that ref, which is where new scopes land first); events.json is left alone.
+//       Fetch the clone first: `git -C <clone-dir> fetch origin`.
 //
 // Not run by the tests. Re-run it, and commit the result, when ChatDaddy adds or changes
 // scopes or events; `validate` is only as current as the last sync.
@@ -16,6 +20,7 @@ import { parseArgs } from 'node:util'
 
 const REPO = 'chatdaddy/typescript-client'
 const SCOPES_PATH = 'src/scopes.json'
+const OPENAPI_SCOPES_PATH = 'artifacts/scopes.json'
 const EVENTS_PATH = 'src/OpenAPI/events/api.ts'
 const dataDir = fileURLToPath(new URL('../src/data/', import.meta.url))
 
@@ -42,7 +47,18 @@ export function parseEventNames(tsSource) {
 }
 
 async function main() {
-	const { values } = parseArgs({ options: { local: { type: 'string' }, ref: { type: 'string', default: 'main' } } })
+	const { values } = parseArgs({ options: { local: { type: 'string' }, openapi: { type: 'string' }, 'openapi-ref': { type: 'string', default: 'origin/main' }, ref: { type: 'string', default: 'main' } } })
+	if(values.openapi) {
+		// scopes only; events.json is left as it is
+		const git = (...args) => execFileSync('git', ['-C', values.openapi, ...args], { encoding: 'utf8', maxBuffer: 1 << 26 })
+		const ref = values['openapi-ref']
+		const scopes = parseScopes(git('show', `${ref}:${OPENAPI_SCOPES_PATH}`))
+		const source = `chatdaddy/openapi@${git('rev-parse', ref).trim()}`
+		writeFileSync(`${dataDir}scopes.json`, `${JSON.stringify({ source, ...scopes }, null, '\t')}\n`)
+		console.log(`${source}: ${scopes.known.length} scopes (${scopes.appGrantable.length} appGrantable)`)
+		return
+	}
+
 	let scopesText, eventsText, source
 	if(values.local) {
 		scopesText = readFileSync(join(values.local, SCOPES_PATH), 'utf8')

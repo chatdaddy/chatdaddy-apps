@@ -102,6 +102,14 @@ const appConnectionInput = {
 	},
 }
 
+// like httpsUrl, but the leftmost host label may be one `{inputId}` placeholder (a tenant host
+// template); connections.mjs ties the host to `hosts`. `format: uri` would refuse the braces.
+const connectionUrl = {
+	type: 'string',
+	pattern: '^https://(\\{[^{}/]+\\}\\.)?[^\\s{}/?#]+([/?#][^\\s{}]*)?$',
+	maxLength: 2048,
+}
+
 const appConnection = {
 	type: 'object',
 	additionalProperties: false,
@@ -110,8 +118,9 @@ const appConnection = {
 		id: { type: 'string', pattern: idPattern, maxLength: 64 },
 		provider: { type: 'string', minLength: 1, maxLength: 64 },
 		type: { type: 'string', enum: ['oauth2', 'apiKey'] },
-		authUrl: httpsUrl,
-		tokenUrl: httpsUrl,
+		authUrl: connectionUrl,
+		tokenUrl: connectionUrl,
+		flavor: { type: 'string', enum: ['generic', 'shopify'] },
 		scopes: { type: 'array', items: { type: 'string', minLength: 1 } },
 		hosts: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1, maxLength: 256 } },
 		inputs: { type: 'array', maxItems: 3, items: appConnectionInput },

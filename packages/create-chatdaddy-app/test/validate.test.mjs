@@ -48,8 +48,8 @@ for(const f of invalidManifestFixtures) {
 test('all 23 ported invalid fixtures and the 41 connection fixtures are present, and their valid base passes', () => {
 	// counts pinned on purpose: dropping a fixture must be a visible edit
 	assert.equal(validateManifest(validFullManifest).valid, true)
-	assert.equal(invalidManifestFixtures.length, 23 + 41)
-	assert.equal(validConnectionVariants.length, 4)
+	assert.equal(invalidManifestFixtures.length, 23 + 45)
+	assert.equal(validConnectionVariants.length, 5)
 })
 
 test('ids must be hyphen-separated lower-case slugs', () => {

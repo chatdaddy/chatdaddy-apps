@@ -93,7 +93,7 @@ test('the committed snapshots are what the parsers produce from their own shape'
 	assert.ok(scopes.appGrantable.every(s => scopes.known.includes(s)))
 	const events = JSON.parse(readFileSync(join(PKG, 'src/data/events.json'), 'utf8'))
 	assert.deepEqual(events.events, [...events.events].sort())
-	assert.ok(scopes.source.startsWith('chatdaddy/typescript-client@'))
+	assert.match(scopes.source, /^chatdaddy\/(typescript-client|openapi)@/)
 })
 
 test('no source file is over 500 lines', () => {
