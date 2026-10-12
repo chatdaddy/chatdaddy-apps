@@ -336,23 +336,12 @@ try {
 
 	// ---- 2b/4 publish to the stub appstore, then install ----
 	await step('4a. publish the manifest (create-chatdaddy-app publish, against the stub appstore)', async() => {
-		// PUBLISH_CLI: a create-chatdaddy-app.mjs that has `publish` (PR #6), if this checkout predates it
-		const cli = process.env.PUBLISH_CLI || join(repo, 'packages/create-chatdaddy-app/bin/create-chatdaddy-app.mjs')
-		const hasPublish = existsSync(join(dirname(cli), '../src/publish.mjs'))
-		const manifestFile = join(repo, 'examples/shopify-order/chatdaddy-app.json')
-		if(hasPublish) {
-			const r = await exec('node', [cli, 'publish', manifestFile, '--version', VERSION, '--base-url', ctx.baseUrl], {
-				env: { PATH: process.env.PATH, CHATDADDY_TOKEN: jwt({ id: randomUUID(), teamId: ctx.teamId, fullName: 'dev' }), CHATDADDY_APPSTORE_URL: `http://127.0.0.1:${stubPort}/appstore` }
-			})
-			if(r.status !== 0) { throw new Error(`publish exited ${r.status}: ${(r.stderr || r.stdout).trim().split('\n').slice(-3).join(' | ')}`) }
-			return r.stdout.split('\n').filter(l => /^(registered|published|app )/.test(l)).join('; ')
-		}
-
-		// no publish command in this checkout of chatdaddy-apps (PR #6 not merged): register what it would send
-		const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
-		manifest.handler.baseUrl = ctx.baseUrl
-		apps.set(APP_ID, { versions: [{ appId: APP_ID, version: VERSION, manifest, handlerType: 'url' }] })
-		return 'publish command not in this checkout; stub registered the same manifest directly'
+		const cli = join(repo, 'packages/create-chatdaddy-app/bin/create-chatdaddy-app.mjs')
+		const r = await exec('node', [cli, 'publish', join(repo, 'examples/shopify-order/chatdaddy-app.json'), '--version', VERSION, '--base-url', ctx.baseUrl], {
+			env: { PATH: process.env.PATH, CHATDADDY_TOKEN: jwt({ id: randomUUID(), teamId: ctx.teamId, fullName: 'dev' }), CHATDADDY_APPSTORE_URL: `http://127.0.0.1:${stubPort}/appstore` }
+		})
+		if(r.status !== 0) { throw new Error(`publish exited ${r.status}: ${(r.stderr || r.stdout).trim().split('\n').slice(-3).join(' | ')}`) }
+		return r.stdout.split('\n').filter(l => /^(registered|published|app )/.test(l)).join('; ')
 	})
 
 	await step('4b. install through bots POST /installations, then the handshake completes (bots -> POST /installed -> ack)', async() => {

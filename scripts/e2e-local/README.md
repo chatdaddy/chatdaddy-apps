@@ -15,7 +15,7 @@ It prints PASS, FAIL or SKIP per step and tears everything down (processes, the 
 - Docker (localstack; the image must be `localstack/localstack:3.8` or set `LOCALSTACK_IMAGE`. `:latest` now refuses to start without an auth token).
 - Postgres at `E2E_PG_URL` (default `postgres://postgres@127.0.0.1:5432`, trust auth). The run creates and drops `e2e_local_<random>`.
 - `openssl`, and a free port 3001 (bots has no PORT setting).
-- Optional: `PUBLISH_CLI` (a `create-chatdaddy-app.mjs` that has `publish`, until PR #6 is merged), `APP_DOCKER_DIR` (a dir with the example's Dockerfile: runs the app as the container instead of `node src/main.mjs`; Linux, uses host networking), `AMQP_URI` (silences bots' "AMQP connect failed" logs; nothing here needs events).
+- Optional: `APP_DOCKER_DIR=examples/shopify-order` (builds the example's Dockerfile and runs it as the container instead of `node src/main.mjs`; Linux, uses host networking), `AMQP_URI` (silences bots' "AMQP connect failed" logs; nothing here needs events).
 
 ## Steps
 
@@ -25,7 +25,7 @@ It prints PASS, FAIL or SKIP per step and tears everything down (processes, the 
 | 1b | bots server boots, accepts a real ES256 token (`PUBLIC_KEY` env) on `GET /bots/installations` |
 | 2a, 2b | localstack KMS up, key created; bots' `connection-crypto` seals and opens through it using only `AWS_ENDPOINT_URL_KMS` and dummy credentials |
 | 3 | the app answers `/healthz` over HTTPS (self-signed cert for a fake host) |
-| 4a | `create-chatdaddy-app publish` against the stub appstore (falls back to registering the manifest directly if the CLI has no `publish`) |
+| 4a | `create-chatdaddy-app publish` against the stub appstore |
 | 4b | `POST /bots/installations`, then bots' real handshake job: mint app token, `POST /installed`, ack check, status `active` |
 | 5 | admin route stores a dummy shop secret; a wrong-HMAC webhook gets 401, a correctly signed `orders/create` gets 200 |
 | 6a | the app's signed trigger reached `appTriggerIngest` and was accepted (replay row in `trigger_event_seen`) |
