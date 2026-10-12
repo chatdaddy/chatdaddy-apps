@@ -8,10 +8,10 @@ Placeholders: `<host>` is the public HTTPS host of your container; `<id>` is the
 
 ## 1. Deploy the container
 
-Build and run it as in the README "Deploy" section (volume at `/data`, three required env vars, public HTTPS in front). Keep `ADMIN_TOKEN` somewhere safe: you need it in step 5.
+Deploy to Fly with `examples/shopify-order/deploy-fly.sh` (README "Deploy": needs `FLY_API_TOKEN` and `CHATDADDY_BOTS_URL` in the environment). It prints `https://<app>.fly.dev`: that is `<host>`. The script is safe to re-run and never rotates the secrets. Read `ADMIN_TOKEN` when you need it in step 5: `fly ssh console -a <app> -C 'printenv ADMIN_TOKEN'` (never write it to disk).
 
 Check: `curl https://<host>/healthz` returns `{"ok":true}` over valid HTTPS.
-Failure: container exits at start (a required env var is missing; the log line names it, never its value); no TLS or connection refused (proxy or port wrong); `/healthz` works over HTTP but not HTTPS (ChatDaddy will refuse an http `baseUrl` at publish).
+Failure: container exits at start (a required env var is missing, see `fly logs -a <app>`; the log line names it, never its value); no TLS or connection refused (proxy or port wrong); `/healthz` works over HTTP but not HTTPS (ChatDaddy will refuse an http `baseUrl` at publish).
 
 ## 2. Publish
 
@@ -28,8 +28,12 @@ Failure: `INVALID, not publishing` lists the manifest problems (nothing was sent
 
 In the ChatDaddy dashboard open your team's apps, find "Shopify order to WhatsApp" and install it. Approve the consent screen (it asks for `ACCOUNT_READ`).
 
-Check: the install succeeds, and the app's container log shows a `POST /installed` handled (no secrets in the log).
-Failure: the app is not listed (published under another team's token); install fails or hangs (ChatDaddy could not reach `https://<host>/installed`: check the baseUrl, TLS and that the container is up). A 401 in the container for `/installed` means `CHATDADDY_PUBLIC_KEY` or `APP_ID` does not match.
+Pre-flight (once, before the first install): the bots web pod AND the bots cron pod both need `APP_CONNECTIONS_KMS_KEY_ID` and the KMS role (`kms:GenerateDataKey`, `kms:Decrypt` on that key). The install seals a secret in the web pod, and the handshake opens it in the cron pod.
+
+The install is created as `pending-handshake`. It becomes `active` only when bots' cron pod runs the handshake job, which runs once a minute; a failed attempt is retried after a 1-minute back-off. Wait up to 2 minutes.
+
+Check: after at most 2 minutes the installation's status reads `active`, and the app's container log has one line `{"msg":"request","method":"POST","route":"/installed","installationId":"<id>","status":200}` (it never logs bodies, secrets or signatures).
+Failure: the app is not listed (published under another team's token); install fails or hangs; the status stays `pending-handshake` past 2 minutes (the cron pod is not running, or it lacks the KMS key id or role; the container log shows no `/installed` line) (ChatDaddy could not reach `https://<host>/installed`: check the baseUrl, TLS and that the container is up). A 401 in the container for `/installed` means `CHATDADDY_PUBLIC_KEY` or `APP_ID` does not match.
 
 ## 4. Note the installation id
 
@@ -77,7 +81,7 @@ Failure: they are missing, so the installation is not on the version you publish
 
 Check, in order:
 1. Shopify shows the webhook delivery as 200.
-2. The container log shows the webhook accepted and the trigger POSTed to bots.
+2. The container log has a line for `"route":"/shopify/webhook/:id"` with `"status":200`. Status 200 means the signature held and bots accepted the trigger; a 502 means bots refused it or was unreachable, and a 401 a bad signature.
 3. The flow run appears in ChatDaddy and the WhatsApp message arrives with the formatted order text.
 
 Failure:

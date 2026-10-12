@@ -75,6 +75,7 @@ const parseJson = raw => {
  * @param {import('./store.mjs').InstallationStore} deps.store
  * @param {string} [deps.adminToken] bearer token for the webhook-secret config route; unset disables it
  * @param {string} deps.botsUrl CHATDADDY_BOTS_URL
+ * @param {(line: object) => void} [deps.log] one call per handled request: route, installationId, status. No bodies, secrets, signatures or headers
  * @param {typeof fetch} [deps.fetch]
  * @param {() => number} [deps.now] unix seconds
  */
@@ -115,7 +116,7 @@ export function createApp(deps) {
 		}
 
 		await store.saveHandshake({ installationId, teamId, appId, signingSecret }, now())
-		return { status: 200, body: { ack: computeHandshakeAck(signingSecret, nonce) } }
+		return { status: 200, body: { ack: computeHandshakeAck(signingSecret, nonce) }, installationId }
 	}
 
 	// POST /actions/:actionId
@@ -294,6 +295,33 @@ export function createApp(deps) {
 		throw new HttpError(404, 'not found')
 	}
 
+	// the route pattern, never the raw path; the installation id only when it is a UUID
+	const ROUTES = [
+		['/installed', /^\/installed$/], ['/uninstalled', /^\/uninstalled$/], ['/healthz', /^\/healthz$/],
+		['/installations/:id/shopify-webhook-secret', /^\/installations\/([^/]+)\/shopify-webhook-secret$/],
+		['/actions/:actionId', /^\/actions\/[^/]+$/], ['/shopify/webhook/:id', /^\/shopify\/webhook\/([^/]+)$/],
+	]
+	const logRequest = (req, out) => {
+		if(!deps.log) {
+			return
+		}
+
+		const path = (req.url || '/').split('?')[0]
+		let route = 'unknown'
+		let id = out.installationId
+		for(const [name, re] of ROUTES) {
+			const m = re.exec(path)
+			if(m) {
+				route = name
+				id ??= m[1]
+				break
+			}
+		}
+
+		id ??= req.headers['x-chatdaddy-installation']
+		deps.log({ msg: 'request', method: req.method, route, installationId: UUID.test(`${id}`) ? id : undefined, status: out.status })
+	}
+
 	return createServer(async(req, res) => {
 		let out
 		try {
@@ -303,6 +331,10 @@ export function createApp(deps) {
 				? { status: err.status, body: { error: err.message }, noReply: err.noReply }
 				: { status: 500, body: { error: 'internal error' } } // never echo err: it may carry secrets
 		}
+
+		try {
+			logRequest(req, out)
+		} catch{} // a logging failure must never cost a response
 
 		if(out.noReply) {
 			return
