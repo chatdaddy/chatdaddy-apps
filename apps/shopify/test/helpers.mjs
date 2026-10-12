@@ -87,13 +87,13 @@ export async function startApp(overrides = {}) {
 	const store = new InstallationStore(undefined)
 	const clock = { t: nowS() }
 	const botsCalls = []
-	const state = { response: () => new Response('{"fired":1}', { status: 202 }), throwError: undefined }
+	const state = { response: () => new Response('{"fired":1}', { status: 202 }), throwError: undefined, tokenError: undefined }
 	const logs = []
 	const proxy = fakeProxy()
 	const contacts = fakeContacts()
 	const server = createApp({
 		appId: APP_ID, publicKey: pem(chatdaddyKeys), store, shopifyClientSecret: CLIENT_SECRET, botsUrl: BOTS_URL,
-		publicUrl: PUBLIC_URL, proxy, contacts, now: () => clock.t, retryDelaysMs: [0, 0], log: l => logs.push(l),
+		publicUrl: PUBLIC_URL, proxy, contacts, getAppToken: async() => { if(state.tokenError) { throw state.tokenError } return 'app-tok' }, now: () => clock.t, retryDelaysMs: [0, 0], log: l => logs.push(l),
 		fetch: async(url, init) => {
 			botsCalls.push({ url, init, body: JSON.parse(init.body) })
 			if(state.throwError) {

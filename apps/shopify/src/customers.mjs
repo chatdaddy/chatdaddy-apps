@@ -3,8 +3,10 @@
 // value ({ name, value }, im `ContactTagUpdate`), so fields and tags are both written as tags.
 // ASSUMED (not run against a live team, see README): that an upsert with a valued tag creates the
 // field without a prior tagsPost, and that a patch tag with `remove: true` removes it.
+import { randomUUID } from 'node:crypto'
 import { gql } from './proxy.mjs'
 import { normalizePhone } from './phone.mjs'
+import { signAppToBots } from './signing.mjs'
 
 export const CHATDADDY_IM_URL = 'https://api.chatdaddy.tech/im'
 // ponytail: one amount in the shop's own currency, not converted; make it a manifest setting when a merchant asks
@@ -162,25 +164,63 @@ export async function redactCustomer(contacts, token, customer) {
 	return ids.length
 }
 
-/** the latest unexpired per-call app token seen for each installation, in memory only, never logged */
-export function createTokenCache(now) {
-	const tokens = new Map()
-	return {
-		remember(installationId, header) {
-			const token = `${header || ''}`.startsWith('Bearer ') ? header.slice(7) : ''
-			try {
-				const exp = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).exp
-				if(Number.isFinite(exp)) {
-					tokens.set(installationId, { token, exp })
-				}
-			} catch{}
+export class TokenError extends Error {
+	constructor(status) {
+		super(`app token route responded ${status}`)
+		this.status = status
+	}
+}
 
-			return token || undefined
-		},
-		get(installationId) {
-			const t = tokens.get(installationId)
-			return t && t.exp > now() + 10 ? t.token : undefined
-		},
-		forget: installationId => tokens.delete(installationId),
+const FALLBACK_TTL_MS = 240_000 // the route omits expiresAt when it cannot read it; tokens live 5 minutes
+
+/**
+ * getAppToken(installationId): POST {botsUrl}/app-installations/{id}/token (bots #396), signed like a
+ * trigger delivery (app-to-bots, fresh event id). Cached per installation until expiresAt - 60 s;
+ * concurrent callers share one request. Throws TokenError(status) on non-2xx. The token is never logged.
+ */
+export function createTokenProvider({ store, botsUrl, fetch: doFetch = fetch, nowMs = Date.now }) {
+	const cache = new Map() // installationId -> { token, until }
+	const inflight = new Map()
+	const request = async installationId => {
+		const secret = store.currentSecret(installationId)
+		if(!secret) {
+			throw new TokenError(0)
+		}
+
+		const eventId = randomUUID()
+		const body = JSON.stringify({ purpose: 'app-token', installationId })
+		const res = await doFetch(`${botsUrl.replace(/\/+$/, '')}/app-installations/${installationId}/token`, {
+			method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10_000), body,
+			headers: {
+				'content-type': 'application/json',
+				'x-chatdaddy-event-id': eventId,
+				'x-chatdaddy-signature': signAppToBots(secret, eventId, body, Math.floor(nowMs() / 1000)),
+			},
+		})
+		if(res.status < 200 || res.status >= 300) {
+			throw new TokenError(res.status)
+		}
+
+		const { accessToken, expiresAt } = await res.json()
+		if(typeof accessToken !== 'string' || !accessToken) {
+			throw new TokenError(res.status)
+		}
+
+		const exp = Date.parse(expiresAt)
+		cache.set(installationId, { token: accessToken, until: (Number.isFinite(exp) ? exp : nowMs() + FALLBACK_TTL_MS) - 60_000 })
+		return accessToken
+	}
+
+	return installationId => {
+		const hit = cache.get(installationId)
+		if(hit && hit.until > nowMs()) {
+			return Promise.resolve(hit.token)
+		}
+
+		if(!inflight.has(installationId)) {
+			inflight.set(installationId, request(installationId).finally(() => inflight.delete(installationId)))
+		}
+
+		return inflight.get(installationId)
 	}
 }

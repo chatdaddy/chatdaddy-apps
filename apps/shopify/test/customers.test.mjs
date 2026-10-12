@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
-import { createContactsClient, customerToContact, fromGraphql, REPEAT_ORDERS, VIP_TOTAL_SPENT } from '../src/customers.mjs'
+import { TokenError, createContactsClient, createTokenProvider, customerToContact, fromGraphql, REPEAT_ORDERS, VIP_TOTAL_SPENT } from '../src/customers.mjs'
+import { signAppToBots } from '../src/signing.mjs'
 import { isCodGateway, mapOrder } from '../src/shopify.mjs'
 import { CUSTOMER, ORDER } from './fixtures.mjs'
-import { INST_A, INST_B, TEAM, APP_ID, mintToken, startApp } from './helpers.mjs'
+import { BOTS_URL, INST_A, INST_B, SIGNING_SECRET, TEAM, APP_ID, mintToken, startApp } from './helpers.mjs'
 
 let t
 beforeEach(async() => {
@@ -48,37 +49,30 @@ test('fromGraphql maps the Admin API customer to the same contact', () => {
 	assert.ok(names(c.tags).includes('shopify-vip'))
 })
 
-test('customers/update webhook upserts the contact with the last call\'s app token', async() => {
-	// a token-bearing call (an action) leaves a token behind for webhook-time use
-	await t.botsPost('/actions/is-checkout-open', { input: { checkoutId: '1' }, context: { installationId: INST_A } },
-		{ headers: { authorization: `Bearer ${mintToken()}` } })
+test('customers/update webhook upserts the contact with a token from getAppToken', async() => {
 	t.proxy.respond = () => ({ data: { customer: { lastOrder: { processedAt: '2026-10-02T00:00:00Z' } }, abandonedCheckouts: { nodes: [] } } })
 	const r = await t.webhook(INST_A, 'customers/update', CUSTOMER)
 	assert.equal(r.status, 200)
 	await t.drain()
 	assert.equal(t.contacts.upserts.length, 1)
 	const [{ token, items }] = t.contacts.upserts
-	assert.match(token, /^ey/) // the token the action call carried
+	assert.equal(token, 'app-tok')
 	assert.equal(items[0].phoneNumber, '+85291234567')
 	assert.equal(val(items[0].tags, 'shopify last order date'), '2026-10-02T00:00:00Z')
 	assert.equal(t.botsCalls.length, 0, 'no trigger is fired for a customer')
 })
 
-test('customer webhook: no phone is skipped, no token writes nothing', async() => {
-	await t.botsPost('/actions/is-checkout-open', { input: { checkoutId: '1' }, context: { installationId: INST_A } },
-		{ headers: { authorization: `Bearer ${mintToken()}` } })
+test('customer webhook: no phone is skipped, a failed token fetch writes nothing', async() => {
 	await t.webhook(INST_A, 'customers/create', { ...CUSTOMER, default_address: null })
 	await t.drain()
 	assert.equal(t.contacts.upserts.length, 0)
 	assert.ok(t.logs.some(l => l.msg === 'skipped' && l.topic === 'customers/create'))
 
-	const t2 = await startApp()
-	await t2.setup()
-	await t2.webhook(INST_A, 'customers/create', CUSTOMER)
-	await t2.drain()
-	assert.equal(t2.contacts.upserts.length, 0)
-	assert.ok(t2.logs.some(l => /no app token/.test(l.msg)))
-	await t2.close()
+	t.state.tokenError = Object.assign(new Error('x'), { status: 503 })
+	await t.webhook(INST_A, 'customers/create', CUSTOMER)
+	await t.drain()
+	assert.equal(t.contacts.upserts.length, 0)
+	assert.ok(t.logs.some(l => /app token unavailable/.test(l.msg) && l.status === 503))
 })
 
 test('connected backfills recent customers after responding, paged through the proxy', async() => {
@@ -109,8 +103,7 @@ const complianceBody = (topic, extra = {}) => ({
 })
 
 test('customers/redact clears the synced fields and tags on that customer\'s contact', async() => {
-	const r = await t.botsPost('/compliance', complianceBody('customers/redact', { customer: { id: 1, phone: '+852 9123 4567' } }),
-		{ headers: { authorization: `Bearer ${mintToken()}` } })
+	const r = await t.botsPost('/compliance', complianceBody('customers/redact', { customer: { id: 1, phone: '+852 9123 4567' } }))
 	assert.equal(r.status, 200)
 	assert.equal(t.contacts.finds[0].q, '+85291234567')
 	const [p] = t.contacts.patches
@@ -119,10 +112,12 @@ test('customers/redact clears the synced fields and tags on that customer\'s con
 	assert.deepEqual(names(p.tags), ['shopify last order date', 'shopify marketing consent', 'shopify order count', 'shopify total spent', 'shopify-customer', 'shopify-repeat', 'shopify-vip'])
 })
 
-test('customers/redact: no token is a 503 (not a silent 200); a wrong shop or signature is refused; data_request is acknowledged', async() => {
+test('customers/redact: a failed token fetch is a 503 so Shopify retries; a wrong shop or signature is refused; data_request is acknowledged', async() => {
+	t.state.tokenError = new Error('route 500')
 	assert.equal((await t.botsPost('/compliance', complianceBody('customers/redact'))).status, 503)
 	assert.equal(t.contacts.patches.length, 0)
-	const h = { headers: { authorization: `Bearer ${mintToken()}` } }
+	t.state.tokenError = undefined
+	const h = {}
 	assert.equal((await t.botsPost('/compliance', { ...complianceBody('customers/redact'), shop: 'other.myshopify.com' }, h)).status, 400)
 	assert.equal((await t.botsPost('/compliance', complianceBody('customers/redact'), { ...h, secret: 'wrong' })).status, 401)
 	assert.equal((await t.botsPost('/compliance', complianceBody('customers/redact'), { ...h, installationId: INST_B })).status, 401)
@@ -163,4 +158,43 @@ test('COD filter: isCod follows the payment gateway names', () => {
 
 	assert.equal(mapOrder(ORDER).payload.isCod, true)
 	assert.equal(mapOrder({ ...ORDER, payment_gateway_names: ['shopify_payments'] }).payload.isCod, false)
+})
+
+test('getAppToken: signed like a trigger delivery, exact body, cached to expiresAt - 60 s, one shared in-flight request', async() => {
+	const calls = []
+	let clockMs = Date.now()
+	let release
+	const gate = new Promise(r => { release = r })
+	const fetchFake = async(url, init) => {
+		calls.push({ url, init })
+		await gate
+		return new Response(JSON.stringify({ accessToken: `tok${calls.length}`, expiresAt: new Date(clockMs + 300_000).toISOString() }))
+	}
+
+	const get = createTokenProvider({ store: t.store, botsUrl: `${BOTS_URL}/`, fetch: fetchFake, nowMs: () => clockMs })
+	await t.handshake()
+	const both = Promise.all([get(INST_A), get(INST_A)])
+	release()
+	assert.deepEqual(await both, ['tok1', 'tok1'])
+	assert.equal(calls.length, 1, 'concurrent callers share one request')
+
+	const { url, init } = calls[0]
+	assert.equal(url, `${BOTS_URL}/app-installations/${INST_A}/token`)
+	assert.equal(init.body, JSON.stringify({ purpose: 'app-token', installationId: INST_A }))
+	assert.equal(init.headers['content-type'], 'application/json')
+	const eventId = init.headers['x-chatdaddy-event-id']
+	assert.equal(init.headers['x-chatdaddy-signature'], signAppToBots(SIGNING_SECRET, eventId, init.body, Math.floor(clockMs / 1000)))
+
+	clockMs += 200_000
+	assert.equal(await get(INST_A), 'tok1', 'cache hit before expiresAt - 60 s')
+	clockMs += 45_000 // 245 s: past 300 - 60
+	assert.equal(await get(INST_A), 'tok2')
+	assert.equal(calls.length, 2)
+})
+
+test('getAppToken: a non-2xx answer throws its status (and never the token or body)', async() => {
+	const get = createTokenProvider({ store: t.store, botsUrl: BOTS_URL, fetch: async() => new Response('{"error":"nope","accessToken":"leak"}', { status: 429 }) })
+	await t.handshake()
+	await assert.rejects(get(INST_A), err => err instanceof TokenError && err.status === 429 && !/leak/.test(err.message))
+	await assert.rejects(createTokenProvider({ store: t.store, botsUrl: BOTS_URL })(INST_B), TokenError) // no secret for an unknown installation
 })

@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { ACTIONS } from './actions.mjs'
 import { tokenMatchesInstall, verifyEs256 } from './jwt.mjs'
-import { createContactsClient, createTokenCache, customerToContact, recentCustomers, redactCustomer, withLastOrderDate } from './customers.mjs'
+import { createContactsClient, createTokenProvider, customerToContact, recentCustomers, redactCustomer, withLastOrderDate } from './customers.mjs'
 import { registerWebhooks, removeWebhooks } from './lifecycle.mjs'
 import { ProxyError } from './proxy.mjs'
 import { orderPhone } from './queries.mjs'
@@ -98,9 +98,8 @@ export function createApp(deps) {
 	const retryDelays = deps.retryDelaysMs || [1000, 5000, 30_000]
 	const log = deps.log || (() => {})
 	const contacts = deps.contacts || createContactsClient({ fetch: doFetch, baseUrl: deps.chatdaddyApiUrl })
-	// Only actions and `connected` carry a per-call app token; Shopify webhooks and compliance events do not.
-	// So customer webhooks use the latest unexpired token those calls left behind (PLATFORM GAP, see README).
-	const tokens = createTokenCache(now)
+	// Shopify webhooks and compliance events carry no app token: ask bots for one (bots #396)
+	const getAppToken = deps.getAppToken || createTokenProvider({ store, botsUrl, fetch: doFetch, nowMs: () => now() * 1000 })
 	const maxPending = deps.maxPending || MAX_PENDING
 	let stopping = false
 	// webhook work that outlives its response; tests (and shutdown) await it via server.drain()
@@ -146,7 +145,8 @@ export function createApp(deps) {
 			throw new HttpError(401, 'invalid signature')
 		}
 
-		return { installationId, raw, token: tokens.remember(installationId, req.headers.authorization) }
+		const auth = req.headers.authorization || ''
+		return { installationId, raw, token: auth.startsWith('Bearer ') ? auth.slice(7) : undefined }
 	}
 
 	// POST /actions/:actionId
@@ -290,9 +290,11 @@ export function createApp(deps) {
 			return
 		}
 
-		const token = tokens.get(installationId)
-		if(!token) {
-			log({ msg: 'customer not synced: no app token available', installationId, topic })
+		let token
+		try {
+			token = await getAppToken(installationId)
+		} catch(err) {
+			log({ msg: 'customer not synced: app token unavailable', installationId, topic, status: err.status })
 			return
 		}
 
@@ -319,7 +321,7 @@ export function createApp(deps) {
 	// POST /compliance: Shopify's customers/data_request, customers/redact (and shop/redact if forwarded),
 	// forwarded by the platform (bots#394), signed like an action call
 	async function compliance(req) {
-		const { installationId, raw, token } = await botsCall(req)
+		const { installationId, raw } = await botsCall(req)
 		const body = parseJson(raw)
 		const inst = store.get(installationId)
 		if(body?.event !== 'compliance' || body.installationId !== installationId || (inst.shop && body.shop !== inst.shop)) {
@@ -328,7 +330,6 @@ export function createApp(deps) {
 
 		if(body.topic === 'shop/redact') {
 			store.clearShop(installationId)
-			tokens.forget(installationId)
 			return { status: 200, body: { ok: true }, installationId }
 		}
 
@@ -337,14 +338,16 @@ export function createApp(deps) {
 			return { status: 200, body: { ok: true }, installationId }
 		}
 
-		const useToken = token || tokens.get(installationId)
-		if(!useToken) {
-			log({ msg: 'customers/redact not applied: no app token available', installationId })
-			throw new HttpError(503, 'no app token')
+		let token
+		try {
+			token = await getAppToken(installationId)
+		} catch(err) {
+			log({ msg: 'customers/redact not applied: app token unavailable', installationId, status: err.status })
+			throw new HttpError(503, 'app token unavailable') // so Shopify retries
 		}
 
 		try {
-			const n = await redactCustomer(contacts, useToken, body.payload?.customer)
+			const n = await redactCustomer(contacts, token, body.payload?.customer)
 			log({ msg: 'customers/redact applied', installationId, contacts: n })
 			return { status: 200, body: { ok: true }, installationId }
 		} catch(err) {
