@@ -233,5 +233,7 @@ export const MUTATIONS = [
 	M('init: id not truncated to 64', 'src/init.mjs', '.slice(0, 64)', ''),
 	M('init: gitignore not renamed', 'src/init.mjs', "{ gitignore: '.gitignore' }", '{}'),
 	M('cli: init failure exits 0', 'src/cli.mjs', "stderr(`error: ${err.message}`)\n\t\t\treturn 1", "stderr(`error: ${err.message}`)\n\t\t\treturn 0"),
-	M('cli: validate failure exits 0', 'src/cli.mjs', '\t\t\treturn 1\n\t\t}\n\n\t\tif(command === \'dev\') {', '\t\t\treturn 0\n\t\t}\n\n\t\tif(command === \'dev\') {'),
+	M('cli: validate failure exits 0', 'src/cli.mjs', '\t\t\treturn 1\n\t\t}\n\n\t\tif(command === \'publish\') {', '\t\t\treturn 0\n\t\t}\n\n\t\tif(command === \'publish\') {'),
+	M('publish: invalid manifest still published', 'src/publish.mjs', 'if(!r.valid) {', 'if(false) {'),
+	M('publish: redirects followed with the token', 'src/publish.mjs', "redirect: 'error',", "redirect: 'follow',"),
 ]

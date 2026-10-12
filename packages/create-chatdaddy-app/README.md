@@ -6,6 +6,7 @@ The builder kit for ChatDaddy apps. Three commands, no runtime dependencies, Nod
 |---|---|
 | `init <dir>` | Scaffold a small, working app: manifest, server, one action, one trigger, tests. |
 | `validate [manifest.json]` | Check a manifest exactly as ChatDaddy does when you publish it. |
+| `publish [manifest.json] --version <v> [--base-url <https url>]` | Validate, register the app if new, and publish a version. Needs `CHATDADDY_TOKEN` (a token with `APPS_DEVELOP`; its team owns the app). Uses appstore `appGet`, `appCreate`, `appVersionCreate`. `CHATDADDY_APPSTORE_URL` overrides the API base. |
 | `dev` | Stand in for ChatDaddy on your machine: install your app, call its actions, receive its triggers. No account needed. |
 
 ## Getting it
