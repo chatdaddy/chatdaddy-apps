@@ -7,6 +7,7 @@ export const APP_SIGNING_LABELS = {
 	appToBots: 'chatdaddy/v1/app-to-bots',
 	botsToApp: 'chatdaddy/v1/bots-to-app',
 	handshakeAck: 'chatdaddy/v1/handshake-ack',
+	uninstalled: 'chatdaddy/v1/uninstalled',
 }
 
 export const APP_SIGNATURE_TOLERANCE_S = 5 * 60
@@ -28,6 +29,7 @@ export const isValidEventId = eventId => typeof eventId === 'string' && EVENT_ID
 
 const appToBotsContent = (t, eventId, body) => `${APP_SIGNING_LABELS.appToBots}.${t}.${eventId}.${body}`
 const botsToAppContent = (t, body) => `${APP_SIGNING_LABELS.botsToApp}.${t}.${body}`
+const uninstalledContent = (t, body) => `${APP_SIGNING_LABELS.uninstalled}.${t}.${body}`
 
 /** app -> bots: header for a trigger call */
 export function signAppToBots(secret, eventId, body, timestampS = nowSeconds()) {
@@ -41,6 +43,16 @@ export function signAppToBots(secret, eventId, body, timestampS = nowSeconds()) 
 /** bots -> app: used only by tests and `create-chatdaddy-app dev`, standing in for ChatDaddy */
 export function signBotsToApp(secret, body, timestampS = nowSeconds()) {
 	return `t=${timestampS},v1=${hmacHex(secret, botsToAppContent(timestampS, body))}`
+}
+
+/** ChatDaddy -> app uninstall notice: its own label, so an action call can never replay as one. Used by tests, standing in for ChatDaddy */
+export function signUninstalled(secret, body, timestampS = nowSeconds()) {
+	return `t=${timestampS},v1=${hmacHex(secret, uninstalledContent(timestampS, body))}`
+}
+
+/** what this app does with an uninstall notice. `secrets`: current plus unexpired previous */
+export function verifyUninstalled(secrets, body, header, nowS = nowSeconds(), toleranceS = APP_SIGNATURE_TOLERANCE_S) {
+	return verifyHeader(secrets, header, nowS, toleranceS, t => uninstalledContent(t, body))
 }
 
 /** what this app does with an action call. `secrets`: current plus unexpired previous */

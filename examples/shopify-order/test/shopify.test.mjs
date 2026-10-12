@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { BOTS_URL, INST_A, INST_B, SAMPLE_ORDER, SHOPIFY_SECRET, shopifyHmac, startApp } from './helpers.mjs'
+import { BOTS_URL, INST_A, INST_B, SAMPLE_ORDER, SHOPIFY_SECRET_A, shopifyHmac, startApp } from './helpers.mjs'
 import { verifyAppToBots, verifyBotsToApp } from '../src/signing.mjs'
 import { MAX_SHOPIFY_BODY_BYTES } from '../src/server.mjs'
 
@@ -10,7 +10,8 @@ const RAW = JSON.stringify(SAMPLE_ORDER)
 async function setup() {
 	const app = await startApp()
 	await app.handshake(SECRET)
-	const hook = (raw = RAW, { id = 'wh-0001', secret = SHOPIFY_SECRET, topic = 'orders/create', inst = INST_A, hmac } = {}) => app.post(
+	await app.setWebhookSecret(INST_A, SHOPIFY_SECRET_A)
+	const hook = (raw = RAW, { id = 'wh-0001', secret = SHOPIFY_SECRET_A, topic = 'orders/create', inst = INST_A, hmac } = {}) => app.post(
 		`/shopify/webhook/${inst}`, raw,
 		{
 			'x-shopify-hmac-sha256': hmac ?? shopifyHmac(secret, raw), 'x-shopify-topic': topic,
@@ -27,7 +28,7 @@ test('bad Shopify HMAC -> 401 and no outbound call', async() => {
 		assert.equal((await hook(RAW, { hmac: '' })).status, 401)
 		assert.equal((await hook(RAW, { hmac: 'AAAA' })).status, 401)
 		const raw2 = RAW.replace('1001', '1002') // valid HMAC for the original body
-		assert.equal((await hook(raw2, { hmac: shopifyHmac(SHOPIFY_SECRET, RAW) })).status, 401)
+		assert.equal((await hook(raw2, { hmac: shopifyHmac(SHOPIFY_SECRET_A, RAW) })).status, 401)
 		assert.equal(app.calls.length, 0)
 	} finally {
 		await app.close()
@@ -83,7 +84,7 @@ test('HMAC is over the raw bytes, not re-serialised JSON', async() => {
 		assert.equal((await hook(spaced)).status, 200)
 		assert.equal(app.calls.length, 1)
 		// HMAC of the re-serialised form must NOT validate the spaced bytes
-		assert.equal((await hook(spaced, { hmac: shopifyHmac(SHOPIFY_SECRET, JSON.stringify(JSON.parse(spaced))) })).status, 401)
+		assert.equal((await hook(spaced, { hmac: shopifyHmac(SHOPIFY_SECRET_A, JSON.stringify(JSON.parse(spaced))) })).status, 401)
 		assert.equal(app.calls.length, 1)
 	} finally {
 		await app.close()
@@ -103,11 +104,11 @@ test('outbound signature uses the current secret after a rotation handshake', as
 	}
 })
 
-test('unknown installation -> 404, no call; other installation never signs with this secret', async() => {
+test('unknown installation -> 401, no call', async() => {
 	const { app, hook } = await setup()
 	try {
-		assert.equal((await hook(RAW, { inst: INST_B })).status, 404)
-		assert.equal((await hook(RAW, { inst: 'not-a-uuid' })).status, 404)
+		assert.equal((await hook(RAW, { inst: INST_B })).status, 401)
+		assert.equal((await hook(RAW, { inst: 'not-a-uuid' })).status, 401)
 		assert.equal(app.calls.length, 0)
 	} finally {
 		await app.close()
