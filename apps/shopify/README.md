@@ -65,3 +65,11 @@ The Dockerfile and entrypoint are the example's (the entrypoint chowns the volum
 ## Local rehearsal
 
 `scripts/e2e-local` drives `examples/shopify-order`. To rehearse this app: point `APP_DOCKER_DIR`/the spawn at `apps/shopify`, publish its manifest (the stub appstore needs the new connection fields), replace step 5 by a `POST /connected` signed with the installation's secret (needs a fake proxy: start the app with a small wrapper that injects one) and then post webhooks signed with `SHOPIFY_CLIENT_SECRET` instead of pasting a per-shop secret. Not done in this PR.
+
+## Customer sync and COD (S-4, S-5)
+
+- `customers/create` and `customers/update` upsert a ChatDaddy contact by phone (`POST /contacts/upsert`). ChatDaddy custom fields are valued contact tags, so the fields (`shopify total spent`, `shopify order count`, `shopify last order date`, `shopify marketing consent`) and the tags (`shopify-customer`, `shopify-vip` at total spent >= 500 in the shop currency, `shopify-repeat` at >= 2 orders) are all written as tags. `connected` backfills the 250 most recently updated customers after it responds.
+- `customers/redact` (forwarded by the platform as `POST /compliance`) removes those fields and tags from the contact; `shop/redact` clears the shop's app-side rows (the installation stays).
+- **Platform gap:** only action calls and `connected` carry a per-call app token. Shopify webhooks and `compliance` events carry none, and `appAccessTokenPost` needs `ADMIN_PANEL_ACCESS`, so the app cannot mint one. Until the platform gives apps a token for those paths, webhook-time sync and redact use the latest unexpired token a recent action or `connected` call left in memory (5 minute life), otherwise they write nothing and log it (redact answers 503).
+- Unverified: valued-tag upsert creating the field, `remove: true` in a contact patch, the repeated `contacts=` query for patch, and `orderCancel`'s exact shape.
+- COD: the `order-created` trigger's `isCod` is true for gateways named cash on delivery / COD (not Shopify's generic `manual`). Actions `tag-order` and `cancel-order` (reason CUSTOMER, restock, no refund unless `refund` is true).

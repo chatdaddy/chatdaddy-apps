@@ -76,3 +76,37 @@ export async function orderPhone(proxy, installationId, orderId) {
 	const o = data.order
 	return o && (o.phone || o.customer?.phone || o.shippingAddress?.phone || o.billingAddress?.phone || undefined)
 }
+
+const orderGid = id => {
+	checkEntityId(id)
+	return gid('Order', id)
+}
+const userErrors = list => (list || []).map(e => e.message).join('; ').slice(0, 300)
+
+/** add tags to an order (Admin GraphQL tagsAdd, needs write_orders); tags are variables, never interpolated */
+export async function tagOrder(proxy, installationId, orderId, tags) {
+	const data = await gql(proxy, installationId, `
+		mutation($id: ID!, $tags: [String!]!) { tagsAdd(id: $id, tags: $tags) { node { id } userErrors { message } } }
+	`, { id: orderGid(orderId), tags })
+	const r = data.tagsAdd
+	return r?.node?.id && !r.userErrors?.length ? { success: true, message: '' } : { success: false, message: userErrors(r?.userErrors) || 'not tagged' }
+}
+
+/**
+ * Cancel an order for the customer (Admin GraphQL orderCancel, needs write_orders): reason CUSTOMER,
+ * restock the items, refund only when asked, no email to the customer from Shopify.
+ * ponytail: unverified against a live store; confirm once the Partner dev store exists
+ * (recalled from the Admin API: orderId, reason, refund and restock are required; the result is a
+ * job plus orderCancelUserErrors).
+ */
+export async function cancelOrder(proxy, installationId, orderId, { refund = false, restock = true } = {}) {
+	const data = await gql(proxy, installationId, `
+		mutation($id: ID!, $refund: Boolean!, $restock: Boolean!) {
+			orderCancel(orderId: $id, reason: CUSTOMER, refund: $refund, restock: $restock, notifyCustomer: false) {
+				job { id } orderCancelUserErrors { message }
+			}
+		}
+	`, { id: orderGid(orderId), refund, restock })
+	const r = data.orderCancel
+	return r?.job?.id && !r.orderCancelUserErrors?.length ? { success: true, message: '' } : { success: false, message: userErrors(r?.orderCancelUserErrors) || 'not cancelled' }
+}

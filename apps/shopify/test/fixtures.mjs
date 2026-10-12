@@ -32,3 +32,9 @@ export const CHECKOUT = {
 	shipping_address: { country_code: 'HK' },
 	line_items: [{ title: 'Shirt', quantity: 2 }],
 }
+
+export const CUSTOMER = {
+	id: 207119551, first_name: 'Ada', last_name: 'Lovelace', email: 'ada@example.com', phone: null,
+	total_spent: '650.00', orders_count: 3, accepts_marketing: false, sms_marketing_consent: { state: 'subscribed' },
+	default_address: { phone: '9123 4567', country_code: 'HK' },
+}

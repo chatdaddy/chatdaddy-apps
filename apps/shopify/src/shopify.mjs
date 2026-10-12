@@ -10,6 +10,9 @@ export const TOPIC_TRIGGERS = {
 	'checkouts/update': 'checkout-abandoned',
 }
 
+/** customer sync topics (S-4): not triggers, they write ChatDaddy contacts */
+export const CUSTOMER_TOPICS = ['customers/create', 'customers/update']
+
 /**
  * Shopify: X-Shopify-Hmac-Sha256 = base64(HMAC-SHA256(appClientSecret, rawBodyBytes)).
  * @param {string} secret
@@ -71,6 +74,9 @@ const marketingConsent = o => Boolean(
 	|| o?.customer?.email_marketing_consent?.state === 'subscribed'
 )
 
+// ponytail: Shopify's generic "manual" gateway is not treated as COD (it is also bank transfer etc.)
+export const isCodGateway = g => /cash[ _]on[ _]delivery|\bcod\b/i.test(g)
+
 const SKIP_NO_PHONE = { skip: 'no usable phone number' }
 
 /** orders/create -> order-created payload, or { skip: reason } */
@@ -104,7 +110,7 @@ export function mapOrder(order) {
 			total: str(order.total_price),
 			currency: str(order.currency),
 			paymentGateway: gateways.join(', '),
-			isCod: gateways.some(g => /cash on delivery|\bcod\b/i.test(g)),
+			isCod: gateways.some(isCodGateway),
 			financialStatus: str(order.financial_status),
 			orderStatusUrl: str(order.order_status_url),
 			marketingConsent: marketingConsent(order),
