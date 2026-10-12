@@ -1,0 +1,378 @@
+{
+  "manifestVersion": 1,
+  "id": "chatdaddy-shopify",
+  "name": "ChatDaddy for Shopify",
+  "description": "Connect your Shopify store and message customers on WhatsApp when it matters: order confirmed, shipped, delivered, and abandoned carts.",
+  "developer": {
+    "name": "ChatDaddy",
+    "email": "apps@chatdaddy.tech",
+    "url": "https://chatdaddy.tech"
+  },
+  "privacyPolicyUrl": "https://chatdaddy.tech/privacy",
+  "scopes": [
+    "CONTACTS_READ_ALL",
+    "CONTACTS_CREATE",
+    "CONTACTS_UPDATE",
+    "TAGS_READ",
+    "TAGS_CREATE",
+    "TRIGGERS_FIRE"
+  ],
+  "aiUse": "none",
+  "handler": {
+    "type": "url",
+    "baseUrl": "https://chatdaddy-shopify.example.com"
+  },
+  "connections": [
+    {
+      "id": "shopify",
+      "provider": "shopify",
+      "type": "oauth2",
+      "flavor": "shopify",
+      "authUrl": "https://{shop}.myshopify.com/admin/oauth/authorize",
+      "tokenUrl": "https://{shop}.myshopify.com/admin/oauth/access_token",
+      "scopes": [
+        "read_orders",
+        "write_orders",
+        "read_customers",
+        "read_fulfillments"
+      ],
+      "hosts": [
+        "{shop}.myshopify.com"
+      ],
+      "inputs": [
+        {
+          "id": "shop",
+          "label": "Shopify store name (the part before .myshopify.com)",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        }
+      ]
+    }
+  ],
+  "flowTriggers": [
+    {
+      "id": "order-created",
+      "title": "Order created",
+      "description": "A customer placed an order (Shopify orders/create). Orders with no usable phone number are skipped.",
+      "payloadSchema": {
+        "type": "object",
+        "required": [
+          "orderId",
+          "phone"
+        ],
+        "properties": {
+          "orderId": {
+            "type": "string"
+          },
+          "orderNumber": {
+            "type": "string",
+            "description": "e.g. #1001"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "description": "E.164, e.g. +85291234567"
+          },
+          "email": {
+            "type": "string"
+          },
+          "itemsSummary": {
+            "type": "string",
+            "description": "e.g. 2 x Shirt, 1 x Hat"
+          },
+          "itemCount": {
+            "type": "number"
+          },
+          "subtotal": {
+            "type": "string"
+          },
+          "total": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "paymentGateway": {
+            "type": "string"
+          },
+          "isCod": {
+            "type": "boolean",
+            "description": "true for cash on delivery"
+          },
+          "financialStatus": {
+            "type": "string"
+          },
+          "orderStatusUrl": {
+            "type": "string"
+          },
+          "marketingConsent": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "id": "order-fulfilled",
+      "title": "Order shipped",
+      "description": "An order was fulfilled, with tracking (Shopify fulfillments/create).",
+      "payloadSchema": {
+        "type": "object",
+        "required": [
+          "orderId",
+          "phone"
+        ],
+        "properties": {
+          "orderId": {
+            "type": "string"
+          },
+          "orderNumber": {
+            "type": "string"
+          },
+          "fulfillmentId": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "description": "E.164, e.g. +85291234567"
+          },
+          "email": {
+            "type": "string"
+          },
+          "itemsSummary": {
+            "type": "string"
+          },
+          "trackingCompany": {
+            "type": "string"
+          },
+          "trackingNumber": {
+            "type": "string"
+          },
+          "trackingUrl": {
+            "type": "string"
+          },
+          "shipmentStatus": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "id": "order-delivered",
+      "title": "Order delivered",
+      "description": "A shipment was marked delivered (Shopify fulfillments/update, shipment status delivered).",
+      "payloadSchema": {
+        "type": "object",
+        "required": [
+          "orderId",
+          "phone"
+        ],
+        "properties": {
+          "orderId": {
+            "type": "string"
+          },
+          "orderNumber": {
+            "type": "string"
+          },
+          "fulfillmentId": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "description": "E.164, e.g. +85291234567"
+          },
+          "email": {
+            "type": "string"
+          },
+          "itemsSummary": {
+            "type": "string"
+          },
+          "trackingCompany": {
+            "type": "string"
+          },
+          "trackingNumber": {
+            "type": "string"
+          },
+          "trackingUrl": {
+            "type": "string"
+          },
+          "shipmentStatus": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "id": "checkout-abandoned",
+      "title": "Checkout started",
+      "description": "A checkout with a phone number was started and not completed. Wait, then check Is checkout open before messaging.",
+      "payloadSchema": {
+        "type": "object",
+        "required": [
+          "checkoutId",
+          "phone",
+          "checkoutUrl"
+        ],
+        "properties": {
+          "checkoutId": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "description": "E.164, e.g. +85291234567"
+          },
+          "email": {
+            "type": "string"
+          },
+          "checkoutUrl": {
+            "type": "string"
+          },
+          "itemsSummary": {
+            "type": "string"
+          },
+          "total": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "marketingConsent": {
+            "type": "boolean",
+            "description": "Shopify marketing opt-in; cart recovery is marketing, only message when true"
+          }
+        }
+      }
+    }
+  ],
+  "flowActions": [
+    {
+      "id": "is-checkout-open",
+      "title": "Is checkout still open?",
+      "description": "Asks Shopify whether an abandoned checkout is still open (not completed). Use after a delay in the cart-recovery flow.",
+      "inputProperties": [
+        {
+          "propertyPath": "checkoutId",
+          "title": "Checkout ID",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "outputProperties": [
+        {
+          "propertyPath": "isOpen",
+          "title": "Is open",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "propertyPath": "checkoutUrl",
+          "title": "Checkout URL",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "get-latest-order-for-contact",
+      "title": "Get latest order for contact",
+      "description": "Finds the contact's most recent Shopify order by phone number, with status and tracking. For a 'where is my order' flow.",
+      "inputProperties": [
+        {
+          "propertyPath": "phone",
+          "title": "Phone (international format)",
+          "type": "string",
+          "required": true
+        },
+        {
+          "propertyPath": "countryCode",
+          "title": "Country code hint, e.g. HK",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "outputProperties": [
+        {
+          "propertyPath": "found",
+          "title": "Order found",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "propertyPath": "orderId",
+          "title": "Order ID",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "orderNumber",
+          "title": "Order number",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "financialStatus",
+          "title": "Payment status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "fulfillmentStatus",
+          "title": "Fulfillment status",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "total",
+          "title": "Total",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "currency",
+          "title": "Currency",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "itemsSummary",
+          "title": "Items summary",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "trackingCompany",
+          "title": "Tracking company",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "trackingNumber",
+          "title": "Tracking number",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "trackingUrl",
+          "title": "Tracking URL",
+          "type": "string",
+          "required": false
+        },
+        {
+          "propertyPath": "orderStatusUrl",
+          "title": "Order status page",
+          "type": "string",
+          "required": false
+        }
+      ]
+    }
+  ]
+}
