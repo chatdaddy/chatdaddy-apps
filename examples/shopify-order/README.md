@@ -51,23 +51,22 @@ npm run mutate           # mutation check: disables each guard, expects the suit
 
 ## Deploy
 
-Runs on any container host. It needs **public HTTPS**: ChatDaddy calls `/installed`, `/actions/*` and `/uninstalled`, and Shopify calls `/shopify/webhook/*`, so terminate TLS in front of the container (your host's proxy or load balancer) and forward to port 3000. `GET /healthz` answers `{ "ok": true }` for health checks.
+Apps run on Fly.io (decided with the platform; the Hangar's workers run there too, region `sin`). `fly.toml` is one machine, one volume, public HTTPS from Fly's proxy.
 
 ```
-docker build -t app-shopify-order examples/shopify-order
-docker run -d --name shopify-order -p 3000:3000 \
-  -v shopify-order-data:/data \
-  -e WEBHOOK_SECRET_KEY="$(openssl rand -hex 32)" \
-  -e ADMIN_TOKEN="$(openssl rand -hex 32)" \
-  -e CHATDADDY_BOTS_URL="<bots base url>" \
-  app-shopify-order
+export FLY_API_TOKEN=...                                    # a Fly token for the org; never printed
+export CHATDADDY_BOTS_URL=https://api.chatdaddy.tech/bots   # the bots base URL
+examples/shopify-order/deploy-fly.sh
 ```
 
-(That generates the two secrets inline; for a real deploy generate them once, keep them in your host's secret store, and pass the same values on every restart.)
+The script creates the Fly app (`FLY_APP`, default `chatdaddy-app-shopify-order`; `FLY_ORG` if you have several) and the `shopify_order_data` volume if missing, generates `WEBHOOK_SECRET_KEY` and `ADMIN_TOKEN` with `openssl rand -hex 32` and sets them as Fly secrets only if they are not set yet (re-running never rotates them), sets `CHATDADDY_BOTS_URL`, runs `fly deploy`, and prints `https://<app>.fly.dev`, which is what `publish --base-url` takes.
 
+- Reading `ADMIN_TOKEN` back (step 5 of [E2E.md](E2E.md) needs it): `fly ssh console -a <app> -C 'printenv ADMIN_TOKEN'`, or the person who ran the script keeps it. `fly secrets list` shows only digests. Do not write it to a file.
+- Exactly one machine, never stopped or scaled: the installation store is one local file with a single writer.
+- Any other host works too: build `examples/shopify-order` (`docker build -t app-shopify-order examples/shopify-order`), mount persistent storage at `/data`, set the three required env vars, and put public HTTPS in front of port 3000. `GET /healthz` answers `{ "ok": true }`.
 - Env vars: the table above. `DATA_FILE` is preset to `/data/installations.json`, `PORT` to 3000. `WEBHOOK_SECRET_KEY`, `ADMIN_TOKEN` and `CHATDADDY_BOTS_URL` are required; the container exits at start if they are missing.
-- Volume: mount persistent storage at `/data`. The installation store (ChatDaddy signing secrets, sealed Shopify secrets) lives there; without a volume every restart forgets every installation. Run a single instance: the store is one local file.
-- The container runs as the non-root `node` user; a mounted volume must be writable by uid 1000. The `chown` in the Dockerfile only applies to an empty, image-created `/data`; a pre-populated volume or bind mount keeps its own ownership, so `chown 1000:1000` it yourself.
+- Volume: without one every restart forgets every installation. Run a single instance.
+- A volume arrives owned by root (Fly does this), so the container starts as root, `docker-entrypoint.sh` chowns `/data` to the `node` user, and the app runs as `node` (not root).
 
 ## Publish
 

@@ -332,7 +332,10 @@ export function createApp(deps) {
 				: { status: 500, body: { error: 'internal error' } } // never echo err: it may carry secrets
 		}
 
-		logRequest(req, out)
+		try {
+			logRequest(req, out)
+		} catch{} // a logging failure must never cost a response
+
 		if(out.noReply) {
 			return
 		}

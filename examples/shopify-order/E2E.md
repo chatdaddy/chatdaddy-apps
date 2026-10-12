@@ -8,10 +8,10 @@ Placeholders: `<host>` is the public HTTPS host of your container; `<id>` is the
 
 ## 1. Deploy the container
 
-Build and run it as in the README "Deploy" section (volume at `/data`, three required env vars, public HTTPS in front). Keep `ADMIN_TOKEN` somewhere safe: you need it in step 5.
+Deploy to Fly with `examples/shopify-order/deploy-fly.sh` (README "Deploy": needs `FLY_API_TOKEN` and `CHATDADDY_BOTS_URL` in the environment). It prints `https://<app>.fly.dev`: that is `<host>`. The script is safe to re-run and never rotates the secrets. Read `ADMIN_TOKEN` when you need it in step 5: `fly ssh console -a <app> -C 'printenv ADMIN_TOKEN'` (never write it to disk).
 
 Check: `curl https://<host>/healthz` returns `{"ok":true}` over valid HTTPS.
-Failure: container exits at start (a required env var is missing; the log line names it, never its value); no TLS or connection refused (proxy or port wrong); `/healthz` works over HTTP but not HTTPS (ChatDaddy will refuse an http `baseUrl` at publish).
+Failure: container exits at start (a required env var is missing, see `fly logs -a <app>`; the log line names it, never its value); no TLS or connection refused (proxy or port wrong); `/healthz` works over HTTP but not HTTPS (ChatDaddy will refuse an http `baseUrl` at publish).
 
 ## 2. Publish
 

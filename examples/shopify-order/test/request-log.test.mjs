@@ -25,3 +25,15 @@ test('one log line per handled request: route, installation id, status, and noth
 		await app.close()
 	}
 })
+
+test('a log function that throws cannot break a response', async() => {
+	const app = await startApp({ log: () => { throw new Error('transport down') } })
+	try {
+		const res = await app.post('/installed', {}, { authorization: 'Bearer garbage' })
+		assert.equal(res.status, 401)
+		const ok = await app.handshake('whsec_x', { installationId: INST_A })
+		assert.equal(ok.status, 200)
+	} finally {
+		await app.close()
+	}
+})

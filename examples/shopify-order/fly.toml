@@ -1,0 +1,39 @@
+# Fly.io config for the Shopify order app. Deploy with ./deploy-fly.sh (see README "Deploy").
+# `app` is the default name; deploy-fly.sh overrides it with FLY_APP, so one file serves any name.
+app = "chatdaddy-app-shopify-order"
+# same region as the Hangar's worker app (agent-hangar fly.worker.toml)
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  DATA_FILE = "/data/installations.json"
+
+# The installation store is ONE local JSON file with a single writer: two machines (or two
+# processes) would each keep their own copy and lose installations. So exactly one machine,
+# pinned to the volume, never stopped (a stop drops in-flight webhooks and ChatDaddy calls)
+# and never scaled out. A Fly volume attaches to one machine anyway.
+[[mounts]]
+  source = "shopify_order_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "30s"
+    timeout = "3s"
+    grace_period = "10s"
+
+# smallest Fly preset: a zero-dependency Node server needs well under 256 MB
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
