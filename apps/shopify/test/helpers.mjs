@@ -1,4 +1,5 @@
 import { createHmac, generateKeyPairSync, sign } from 'node:crypto'
+import { ProxyError } from '../src/proxy.mjs'
 import { createApp } from '../src/server.mjs'
 import { signBotsToApp, signUninstalled } from '../src/signing.mjs'
 import { InstallationStore } from '../src/store.mjs'
@@ -45,20 +46,25 @@ export function fakeProxy() {
 			}
 
 			if(/webhookSubscriptions\(/.test(query)) {
-				return { data: { webhookSubscriptions: { nodes: subs } } }
+				return { data: { webhookSubscriptions: { nodes: subs.filter(x => x.endpoint.callbackUrl === variables.url), pageInfo: { hasNextPage: false } } } }
 			}
 
 			if(/webhookSubscriptionCreate/.test(query)) {
-				const sub = {
-					id: `gid://shopify/WebhookSubscription/${subs.length + 1}`, topic: variables.topic,
-					endpoint: { callbackUrl: variables.sub.callbackUrl },
+				const data = {}
+				for(const m of query.matchAll(/(a\d+): webhookSubscriptionCreate\(topic: \$(t\d+), webhookSubscription: \$(s\d+)/g)) {
+					const sub = {
+						id: `gid://shopify/WebhookSubscription/${subs.length + 1}`, topic: variables[m[2]],
+						endpoint: { callbackUrl: variables[m[3]].callbackUrl },
+					}
+					subs.push(sub)
+					data[m[1]] = { webhookSubscription: { id: sub.id }, userErrors: [] }
 				}
-				subs.push(sub)
-				return { data: { webhookSubscriptionCreate: { webhookSubscription: { id: sub.id }, userErrors: [] } } }
+
+				return { data }
 			}
 
 			if(/webhookSubscriptionDelete/.test(query)) {
-				return { data: { webhookSubscriptionDelete: { deletedWebhookSubscriptionId: variables.id, userErrors: [] } } }
+				return { data: {} }
 			}
 
 			return p.respond ? p.respond(query, variables) : { data: {} }
@@ -130,7 +136,7 @@ export async function startApp(overrides = {}) {
 		await botsPost('/connected', { event: 'connected', installationId: INST_A, connection: { id: 'shopify', inputs: { shop } } })
 	}
 	return {
-		base, store, clock, botsCalls, state, logs, proxy, post, handshake, botsPost, webhook, setup,
+		server, base, store, clock, botsCalls, state, logs, proxy, post, handshake, botsPost, webhook, setup,
 		drain: () => server.drain(),
 		close: () => { server.closeAllConnections(); return new Promise(r => server.close(r)) },
 	}

@@ -20,7 +20,7 @@ Every trigger payload has `phone` in E.164 (`src/phone.mjs`). An order, fulfillm
 
 ## State: SQLite
 
-`node:sqlite` (built into Node 22.13+, no dependency; prints an ExperimentalWarning). One file, `DATA_FILE` (default `./data/app.db`, `/data/app.db` in Docker, on the Fly volume, single machine). Tables: `installations` (shop <-> installation, ChatDaddy signing secrets in plaintext, so protect the volume), `webhooks` (Shopify subscription ids), `dedupe` (webhook ids and once-per-thing keys, pruned after 7 days). Uninstall deletes every row of the installation.
+`node:sqlite` (built into Node 22.13+, no dependency; prints an ExperimentalWarning). One file, `DATA_FILE` (default `./data/app.db`, `/data/app.db` in Docker, on the Fly volume, single machine). Tables: `installations` (shop <-> installation, ChatDaddy signing secrets in plaintext, so protect the volume), `webhooks` (Shopify subscription ids), `dedupe` (webhook ids and once-per-thing keys, pruned after 7 days, at most once a minute), `outbox` (undelivered triggers). Uninstall deletes every row of the installation.
 
 ## Env vars
 
@@ -35,11 +35,11 @@ Every trigger payload has `phone` in E.164 (`src/phone.mjs`). An order, fulfillm
 
 - `POST /installed`, `POST /uninstalled`, `POST /actions/:id`: the contract in `examples/shopify-order/README.md`.
 - `POST /connected` (bots -> app): the `connected` lifecycle event. **Assumed shape** (P5 A-6 not built): signed like an action call, body `{ event: 'connected', installationId, connection: { id, inputs: { shop } } }`. Stores the shop and registers the five webhook subscriptions through the proxy (idempotent). 502 on proxy failure so bots can retry; 409 if the shop belongs to another installation.
-- `POST /shopify/webhook/:installationId` (Shopify -> app): HMAC (`X-Shopify-Hmac-Sha256`) with the client secret, and `X-Shopify-Shop-Domain` must match the installation's shop; unknown installation, bad signature and wrong shop are one bare 401. Dedupe by `X-Shopify-Webhook-Id`; answers 200 at once, then delivers to bots in the background (3 retries, 1 s / 5 s / 30 s, same event id so bots de-dupes). If all fail it is logged and given up: the retry queue is in memory, lost on restart.
+- `POST /shopify/webhook/:installationId` (Shopify -> app): HMAC (`X-Shopify-Hmac-Sha256`) with the client secret, and `X-Shopify-Shop-Domain` must match the installation's shop; unknown installation, bad signature and wrong shop are one bare 401. Dedupe by `X-Shopify-Webhook-Id`; answers 200 at once, then delivers to bots in the background (3 retries, 1 s / 5 s / 30 s, same event id so bots de-dupes). Each trigger is first written to an `outbox` table in SQLite and removed once bots accepts it (or refuses it with a 4xx). If delivery keeps failing it stays there and is replayed on the next boot (kept 24 h, at most 1000 rows). At 200 deliveries in flight new webhooks get 503 so Shopify retries. SIGTERM/SIGINT stops accepting work and waits up to 10 s for deliveries in flight.
 
 ## Connection proxy
 
-All Shopify calls (webhook registration, the two actions, the fulfillment phone lookup) go through `proxy.graphql({ installationId, query, variables })` (`src/proxy.mjs`). The real client arrives with P5 A-5; `main.mjs` uses `unavailableProxy`, so until then actions answer 502 and `connected` cannot register webhooks. Tests use a fake. Public apps must use the GraphQL Admin API, hence GraphQL, not REST.
+All Shopify calls (webhook registration, the two actions, the fulfillment phone lookup) go through `proxy.graphql({ installationId, query, variables })` (`src/proxy.mjs`). The real client arrives with P5 A-5; `main.mjs` uses `unavailableProxy`, so until then actions answer 502 and `connected` cannot register webhooks. Tests use a fake. Registration and removal are one request each (aliased mutations), the latest-order lookup is one query, and every value is a GraphQL variable. Failures from the proxy or Shopify (`ProxyError`) answer 502; anything else is a bug and answers 500 with its own log line. Public apps must use the GraphQL Admin API, hence GraphQL, not REST.
 
 ## Assumptions to verify at the first real install
 

@@ -31,5 +31,17 @@ const server = createApp({
 	proxy: unavailableProxy,
 	log: ({ msg, ...rest }) => log('info', msg, rest),
 })
+server.replay()
 const port = Number(process.env.PORT || 3000)
 server.listen(port, () => log('info', 'chatdaddy-shopify listening', { port }))
+
+// a deploy sends SIGTERM: stop taking webhooks, give in-flight deliveries a few seconds; whatever
+// is left is in the SQLite outbox and replays on the next boot
+for(const sig of ['SIGTERM', 'SIGINT']) {
+	process.once(sig, async() => {
+		log('info', 'shutting down', { sig })
+		await server.shutdown(10_000)
+		store.db.close()
+		process.exit(0)
+	})
+}

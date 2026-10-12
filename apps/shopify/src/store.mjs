@@ -11,6 +11,10 @@ import { DatabaseSync } from 'node:sqlite'
 /** how long the old secret keeps verifying after a re-handshake */
 export const PREVIOUS_SECRET_WINDOW_S = 15 * 60
 export const DEDUPE_TTL_S = 7 * 24 * 3600
+const PRUNE_EVERY_S = 60
+// undelivered trigger payloads kept for replay on boot: bounded by age and by count
+export const OUTBOX_TTL_S = 24 * 3600
+export const OUTBOX_MAX_ROWS = 1000
 
 export class ShopConflictError extends Error {}
 
@@ -21,6 +25,7 @@ export class InstallationStore {
 			mkdirSync(dirname(file), { recursive: true })
 		}
 
+		this.lastPrune = -Infinity
 		this.db = new DatabaseSync(file || ':memory:')
 		this.db.exec(`
 			PRAGMA journal_mode = WAL;
@@ -36,6 +41,10 @@ export class InstallationStore {
 			CREATE TABLE IF NOT EXISTS dedupe (
 				installation_id TEXT NOT NULL, key TEXT NOT NULL, seen_at INTEGER NOT NULL,
 				PRIMARY KEY (installation_id, key)
+			);
+			CREATE TABLE IF NOT EXISTS outbox (
+				id INTEGER PRIMARY KEY AUTOINCREMENT, installation_id TEXT NOT NULL, trigger_id TEXT NOT NULL,
+				event_id TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL
 			);
 		`)
 		if(file) {
@@ -127,7 +136,11 @@ export class InstallationStore {
 
 	/** true the first time `key` is seen for this installation; false for a repeat */
 	claim(installationId, key, nowS) {
-		this.db.prepare('DELETE FROM dedupe WHERE seen_at < ?').run(nowS - DEDUPE_TTL_S)
+		if(nowS - this.lastPrune >= PRUNE_EVERY_S) {
+			this.lastPrune = nowS
+			this.db.prepare('DELETE FROM dedupe WHERE seen_at < ?').run(nowS - DEDUPE_TTL_S)
+		}
+
 		return this.db.prepare('INSERT OR IGNORE INTO dedupe (installation_id, key, seen_at) VALUES (?, ?, ?)')
 			.run(installationId, key, nowS).changes === 1
 	}
@@ -139,10 +152,33 @@ export class InstallationStore {
 
 	/** uninstall / shop/redact: drop every row for the installation */
 	deleteInstallation(installationId) {
-		for(const t of ['webhooks', 'dedupe']) {
-			this.db.prepare(`DELETE FROM ${t} WHERE installation_id = ?`).run(installationId)
+		this.db.prepare('DELETE FROM webhooks WHERE installation_id = ?').run(installationId)
+		this.db.prepare('DELETE FROM dedupe WHERE installation_id = ?').run(installationId)
+		this.db.prepare('DELETE FROM outbox WHERE installation_id = ?').run(installationId)
+		this.db.prepare('DELETE FROM installations WHERE installation_id = ?').run(installationId)
+	}
+
+	/** keep a trigger until bots accepts it; returns its row id, or undefined when the outbox is full */
+	enqueue(installationId, triggerId, eventId, body, nowS) {
+		this.db.prepare('DELETE FROM outbox WHERE created_at < ?').run(nowS - OUTBOX_TTL_S)
+		if(this.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n >= OUTBOX_MAX_ROWS) {
+			return undefined
 		}
 
-		this.db.prepare('DELETE FROM installations WHERE installation_id = ?').run(installationId)
+		return Number(this.db.prepare(
+			'INSERT INTO outbox (installation_id, trigger_id, event_id, body, created_at) VALUES (?, ?, ?, ?, ?)'
+		).run(installationId, triggerId, eventId, body, nowS).lastInsertRowid)
+	}
+
+	dequeue(id) {
+		this.db.prepare('DELETE FROM outbox WHERE id = ?').run(id)
+	}
+
+	/** rows younger than the TTL, oldest first */
+	pendingTriggers(nowS) {
+		return this.db.prepare('SELECT id, installation_id, trigger_id, event_id, body FROM outbox WHERE created_at >= ? ORDER BY id')
+			.all(nowS - OUTBOX_TTL_S).map(r => ({
+				id: r.id, installationId: r.installation_id, triggerId: r.trigger_id, eventId: r.event_id, body: r.body,
+			}))
 	}
 }

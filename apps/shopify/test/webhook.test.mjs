@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { ProxyError } from '../src/proxy.mjs'
 import { afterEach, beforeEach, test } from 'node:test'
 import { verifyAppToBots } from '../src/signing.mjs'
 import { verifyShopifyHmac } from '../src/shopify.mjs'
@@ -108,7 +109,7 @@ test('fulfillment with no phone looks the order up through the proxy', async() =
 })
 
 test('fulfillment with no phone anywhere is skipped, even if the lookup fails', async() => {
-	t.proxy.fail = new Error('proxy down')
+	t.proxy.fail = new ProxyError('proxy down')
 	await t.webhook(INST_A, 'fulfillments/create', { ...FULFILLMENT, destination: { first_name: 'Ada' } })
 	await t.drain()
 	assert.equal(t.botsCalls.length, 0)
@@ -150,6 +151,7 @@ test('a 4xx from bots is not retried; failure is logged and the semantic claim i
 	await t.drain()
 	assert.equal(t.botsCalls.length, 1)
 	assert.equal(t.logs.find(l => l.msg === 'trigger failed').reason, 'bots responded 400')
+	assert.equal(t.store.pendingTriggers(t.clock.t).length, 0) // a refusal is final: not kept for replay
 	t.state.response = () => new Response('', { status: 202 })
 	await t.webhook(INST_A, 'fulfillments/update', DELIVERED) // a later delivery may try again
 	await t.drain()
@@ -162,4 +164,67 @@ test('bots unreachable: retried, then logged as failed', async() => {
 	await t.drain()
 	assert.equal(t.botsCalls.length, 3)
 	assert.equal(t.logs.find(l => l.msg === 'trigger failed').reason, 'bots unreachable')
+})
+
+test('a failed delivery stays in the outbox and replays on boot, then is removed', async() => {
+	t.state.throwError = new Error('boom')
+	await t.webhook(INST_A, 'orders/create', ORDER, { id: 'wh-replay' })
+	await t.drain()
+	assert.equal(t.store.pendingTriggers(t.clock.t).length, 1)
+	t.state.throwError = undefined
+	t.botsCalls.length = 0
+	t.server.replay()
+	await t.drain()
+	assert.equal(t.botsCalls.length, 1)
+	assert.equal(t.botsCalls[0].url, `${BOTS_URL}/apps/triggers/${INST_A}/order-created`)
+	assert.equal(t.botsCalls[0].init.headers['x-chatdaddy-event-id'], 'wh-replay')
+	assert.equal(t.store.pendingTriggers(t.clock.t).length, 0)
+})
+
+test('outbox rows expire after 24 h and are capped', () => {
+	const s = t.store
+	s.enqueue(INST_A, 'order-created', 'e1', '{}', 1000)
+	assert.equal(s.pendingTriggers(1000 + 24 * 3600 + 1).length, 0)
+	for(let i = 0; i < 1100; i++) {
+		s.enqueue(INST_A, 'order-created', `e${i}`, '{}', 5000)
+	}
+
+	assert.equal(s.pendingTriggers(5000).length, 1000)
+})
+
+test('too many deliveries in flight: 503 so Shopify retries, nothing claimed', async() => {
+	const busy = await startApp({ maxPending: 1 })
+	try {
+		await busy.setup()
+		let release
+		busy.state.response = () => new Promise(r => { release = () => r(new Response('', { status: 202 })) })
+		const first = await busy.webhook(INST_A, 'orders/create', ORDER, { id: 'wh-a' })
+		assert.equal(first.status, 200)
+		const second = await busy.webhook(INST_A, 'orders/create', ORDER, { id: 'wh-b' })
+		assert.equal(second.status, 503)
+		assert.ok(busy.logs.some(l => l.msg === 'busy, webhook refused'))
+		while(!release) {
+			await new Promise(r => setTimeout(r, 5))
+		}
+
+		release()
+		await busy.drain()
+		assert.equal((await busy.webhook(INST_A, 'orders/create', ORDER, { id: 'wh-b' })).status, 200) // not claimed before
+	} finally {
+		await busy.close()
+	}
+})
+
+test('shutdown refuses new work and waits for deliveries in flight', async() => {
+	let release
+	t.state.response = () => new Promise(r => { release = () => r(new Response('', { status: 202 })) })
+	await t.webhook(INST_A, 'orders/create', ORDER, { id: 'wh-sd' })
+	while(!release) {
+		await new Promise(r => setTimeout(r, 5))
+	}
+
+	const done = t.server.shutdown(5000)
+	release()
+	await done
+	assert.equal(t.store.pendingTriggers(t.clock.t).length, 0)
 })

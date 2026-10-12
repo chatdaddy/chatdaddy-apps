@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ProxyError } from '../src/proxy.mjs'
 import { afterEach, beforeEach, test } from 'node:test'
 import { InstallationStore } from '../src/store.mjs'
 import { ORDER } from './fixtures.mjs'
@@ -31,12 +32,18 @@ test('connected registers one webhook per topic at this installation\'s URL, and
 	await t.handshake()
 	const r = await connect('My-Store')
 	assert.deepEqual(r.json, { ok: true, webhooks: 5 })
-	const creates = t.proxy.calls.filter(c => c.variables?.topic)
-	assert.deepEqual(creates.map(c => c.variables.topic).sort(), TOPICS)
-	for(const c of creates) {
-		assert.equal(c.installationId, INST_A)
-		assert.deepEqual(c.variables.sub, { callbackUrl: `${PUBLIC_URL}/shopify/webhook/${INST_A}`, format: 'JSON' })
+	// one list request and ONE mutation request carrying all five creates (aliased, values as variables)
+	const creates = t.proxy.calls.filter(c => /webhookSubscriptionCreate/.test(c.query))
+	assert.equal(creates.length, 1)
+	assert.equal(t.proxy.calls.length, 2)
+	const [c] = creates
+	assert.equal(c.installationId, INST_A)
+	assert.deepEqual(Object.keys(c.variables).filter(k => k.startsWith('t')).map(k => c.variables[k]).sort(), TOPICS)
+	for(const k of Object.keys(c.variables).filter(k => k.startsWith('s'))) {
+		assert.deepEqual(c.variables[k], { callbackUrl: `${PUBLIC_URL}/shopify/webhook/${INST_A}`, format: 'JSON' })
 	}
+
+	assert.ok(!c.query.includes(INST_A) && !c.query.includes('http'), 'no value is interpolated into the query')
 
 	assert.equal(t.store.get(INST_A).shop, 'my-store.myshopify.com')
 	assert.equal(t.store.installationForShop('my-store.myshopify.com'), INST_A)
@@ -47,7 +54,7 @@ test('a repeated connected does not create the webhooks twice', async() => {
 	await t.handshake()
 	await connect()
 	await connect('test-shop.myshopify.com')
-	assert.equal(t.proxy.calls.filter(c => c.variables?.topic).length, 5)
+	assert.equal(t.proxy.calls.filter(c => /webhookSubscriptionCreate/.test(c.query)).length, 1)
 	assert.equal(t.proxy.subs.length, 5)
 })
 
@@ -61,7 +68,7 @@ test('connected: bad signature 401, bad shop 400, shop already linked elsewhere 
 	const other = await t.botsPost('/connected', { event: 'connected', installationId: INST_B, connection: { inputs: { shop: 'test-shop' } } },
 		{ installationId: INST_B, secret: 'whsec_other' })
 	assert.equal(other.status, 409)
-	t.proxy.fail = new Error('proxy down')
+	t.proxy.fail = new ProxyError('proxy down')
 	assert.equal((await connect('second-shop')).status, 502)
 })
 
@@ -83,7 +90,8 @@ test('uninstalled removes the webhooks at Shopify and every row; a bad label or 
 	const r = await t.botsPost('/uninstalled', body, { label: 'uninstalled' })
 	assert.equal(r.status, 200)
 	const deletes = t.proxy.calls.filter(c => /webhookSubscriptionDelete/.test(c.query))
-	assert.equal(deletes.length, 5)
+	assert.equal(deletes.length, 1) // one request deletes all five
+	assert.equal(Object.keys(deletes[0].variables).length, 5)
 	assert.equal(t.store.get(INST_A), undefined)
 	assert.deepEqual(t.store.webhooksFor(INST_A), [])
 	assert.equal(t.store.installationForShop('test-shop.myshopify.com'), undefined)
@@ -93,11 +101,28 @@ test('uninstalled removes the webhooks at Shopify and every row; a bad label or 
 
 test('uninstalled still deletes local state when Shopify can no longer be reached', async() => {
 	await t.setup()
-	t.proxy.fail = new Error('connection deleted')
+	t.proxy.fail = new ProxyError('connection deleted')
 	const r = await t.botsPost('/uninstalled', { event: 'uninstalled', installationId: INST_A }, { label: 'uninstalled' })
 	assert.equal(r.status, 200)
 	assert.equal(t.store.get(INST_A), undefined)
 	assert.ok(t.logs.some(l => l.msg === 'webhook removal failed'))
+})
+
+test('a Shopify userError on create is a 502 and stores nothing', async() => {
+	await t.handshake()
+	t.proxy.respond = () => ({ data: {} })
+	const orig = t.proxy.graphql
+	t.proxy.graphql = async args => (/webhookSubscriptionCreate/.test(args.query)
+		? { data: { a0: { webhookSubscription: null, userErrors: [{ message: 'Address is invalid' }] } } } : orig(args))
+	assert.equal((await connect()).status, 502)
+	assert.deepEqual(t.store.webhooksFor(INST_A), [])
+})
+
+test('store.mjs builds no SQL from interpolated strings', () => {
+	const src = readFileSync(new URL('../src/store.mjs', import.meta.url), 'utf8')
+	for(const m of src.matchAll(/\.(?:prepare|exec)\(\s*`([^`]*)`/g)) {
+		assert.ok(!m[1].includes('${'), `interpolated SQL: ${m[1].slice(0, 60)}`)
+	}
 })
 
 test('SQLite store: state survives a reopen; a re-handshake keeps the shop and demotes the old secret', () => {

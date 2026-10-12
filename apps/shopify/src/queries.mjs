@@ -3,11 +3,18 @@
 // Verify against the Admin GraphQL docs with the first real store, see README "Assumptions".
 import { gql } from './proxy.mjs'
 
+// numeric Shopify ids only: they end up inside a search string / a gid, so never anything else
+const checkEntityId = id => {
+	if(!/^\d{1,20}$/.test(`${id}`)) {
+		throw new TypeError('invalid Shopify id')
+	}
+}
 const gid = (type, id) => `gid://shopify/${type}/${id}`
 const money = set => ({ amount: set?.shopMoney?.amount ?? '', currency: set?.shopMoney?.currencyCode ?? '' })
 
 /** @returns {{ found: boolean, isOpen: boolean, checkoutUrl: string }} open = exists and not completed */
 export async function checkoutStatus(proxy, installationId, checkoutId) {
+	checkEntityId(checkoutId)
 	const data = await gql(proxy, installationId, `
 		query($q: String!) { abandonedCheckouts(first: 1, query: $q) { nodes { id completedAt abandonedCheckoutUrl } } }
 	`, { q: `id:${checkoutId}` })
@@ -19,27 +26,26 @@ export async function checkoutStatus(proxy, installationId, checkoutId) {
 	}
 }
 
-const ORDER_FIELDS = `
-	legacyResourceId name displayFinancialStatus displayFulfillmentStatus statusPageUrl
-	totalPriceSet { shopMoney { amount currencyCode } }
-	lineItems(first: 10) { nodes { title quantity } }
-	fulfillments(first: 5) { trackingInfo { company number url } }
-`
-
-/** latest order of the customer with this E.164 phone; undefined when there is none */
+/** latest order of the customer with this E.164 phone (one query); undefined when there is none */
 export async function latestOrderByPhone(proxy, installationId, phone) {
-	const customers = await gql(proxy, installationId, `
-		query($q: String!) { customers(first: 1, query: $q) { nodes { id } } }
+	const data = await gql(proxy, installationId, `
+		query($q: String!) {
+			customers(first: 1, query: $q) {
+				nodes {
+					id
+					orders(first: 1, sortKey: PROCESSED_AT, reverse: true) {
+						nodes {
+							legacyResourceId name displayFinancialStatus displayFulfillmentStatus statusPageUrl
+							totalPriceSet { shopMoney { amount currencyCode } }
+							lineItems(first: 10) { nodes { title quantity } }
+							fulfillments(first: 5) { trackingInfo { company number url } }
+						}
+					}
+				}
+			}
+		}
 	`, { q: `phone:${phone}` })
-	const customerId = customers.customers?.nodes?.[0]?.id
-	if(!customerId) {
-		return undefined
-	}
-
-	const orders = await gql(proxy, installationId, `
-		query($q: String!) { orders(first: 1, query: $q, sortKey: PROCESSED_AT, reverse: true) { nodes { ${ORDER_FIELDS} } } }
-	`, { q: `customer_id:${customerId.split('/').pop()}` })
-	const o = orders.orders?.nodes?.[0]
+	const o = data.customers?.nodes?.[0]?.orders?.nodes?.[0]
 	if(!o) {
 		return undefined
 	}
@@ -63,6 +69,7 @@ export async function latestOrderByPhone(proxy, installationId, phone) {
 
 /** the order's own phone, for fulfillment webhooks whose destination has none */
 export async function orderPhone(proxy, installationId, orderId) {
+	checkEntityId(orderId)
 	const data = await gql(proxy, installationId, `
 		query($id: ID!) { order(id: $id) { phone customer { phone } shippingAddress { phone countryCodeV2 } billingAddress { phone countryCodeV2 } } }
 	`, { id: gid('Order', orderId) })

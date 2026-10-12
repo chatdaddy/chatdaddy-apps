@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { ProxyError } from '../src/proxy.mjs'
 import { afterEach, beforeEach, test } from 'node:test'
 import { INST_A, INST_B, startApp } from './helpers.mjs'
 
@@ -26,27 +27,26 @@ test('is-checkout-open: open, completed and unknown checkouts', async() => {
 test('is-checkout-open: needs a numeric checkoutId; a Shopify failure is a 502, not a lie', async() => {
 	assert.equal((await call('is-checkout-open', {})).status, 400)
 	assert.equal((await call('is-checkout-open', { checkoutId: '1; drop' })).status, 400)
-	t.proxy.fail = new Error('connection gone')
+	t.proxy.fail = new ProxyError('connection gone')
 	assert.equal((await call('is-checkout-open', { checkoutId: '111' })).status, 502)
+	// a bug (not the proxy) is a 500 with its own log line
+	t.proxy.fail = new TypeError('oops')
+	assert.equal((await call('is-checkout-open', { checkoutId: '111' })).status, 500)
+	assert.ok(t.logs.some(l => l.msg === 'action crashed (bug)'))
 })
 
 test('get-latest-order-for-contact: finds the customer by normalised phone, then their latest order', async() => {
-	t.proxy.respond = (q, v) => {
-		if(/customers\(/.test(q)) {
-			return { data: { customers: { nodes: v.q === 'phone:+85291234567' ? [{ id: 'gid://shopify/Customer/55' }] : [] } } }
-		}
+	t.proxy.respond = (q, v) => (v.q === 'phone:+85291234567' ? { data: { customers: { nodes: [{ id: 'gid://shopify/Customer/55', orders: { nodes: [{
+		legacyResourceId: '820982911946', name: '#1001', displayFinancialStatus: 'PAID', displayFulfillmentStatus: 'FULFILLED',
+		statusPageUrl: 'https://s/status', totalPriceSet: { shopMoney: { amount: '410.00', currencyCode: 'HKD' } },
+		lineItems: { nodes: [{ title: 'Shirt', quantity: 2 }] },
+		fulfillments: [{ trackingInfo: [{ company: 'SF Express', number: 'SF1', url: 'https://sf/SF1' }] }],
+	}] } }] } } } : { data: { customers: { nodes: [] } } })
 
-		assert.equal(v.q, 'customer_id:55')
-		return { data: { orders: { nodes: [{
-			legacyResourceId: '820982911946', name: '#1001', displayFinancialStatus: 'PAID', displayFulfillmentStatus: 'FULFILLED',
-			statusPageUrl: 'https://s/status', totalPriceSet: { shopMoney: { amount: '410.00', currencyCode: 'HKD' } },
-			lineItems: { nodes: [{ title: 'Shirt', quantity: 2 }] },
-			fulfillments: [{ trackingInfo: [{ company: 'SF Express', number: 'SF1', url: 'https://sf/SF1' }] }],
-		}] } } }
-	}
-
+	const before = t.proxy.calls.length
 	const r = await call('get-latest-order-for-contact', { phone: '9123 4567', countryCode: 'HK' })
 	assert.equal(r.status, 200)
+	assert.equal(t.proxy.calls.length - before, 1) // customer and order in one query
 	assert.deepEqual(r.json, {
 		found: true, orderId: '820982911946', orderNumber: '#1001', financialStatus: 'PAID', fulfillmentStatus: 'FULFILLED',
 		total: '410.00', currency: 'HKD', itemsSummary: '2 x Shirt', trackingCompany: 'SF Express', trackingNumber: 'SF1',
@@ -56,7 +56,7 @@ test('get-latest-order-for-contact: finds the customer by normalised phone, then
 
 test('get-latest-order-for-contact: no customer or no orders is found:false; a bad phone is a 400', async() => {
 	assert.deepEqual((await call('get-latest-order-for-contact', { phone: '+85291234567' })).json, { found: false })
-	t.proxy.respond = q => (/customers\(/.test(q) ? { data: { customers: { nodes: [{ id: 'gid://shopify/Customer/1' }] } } } : { data: { orders: { nodes: [] } } })
+	t.proxy.respond = () => ({ data: { customers: { nodes: [{ id: 'gid://shopify/Customer/1', orders: { nodes: [] } }] } } })
 	assert.deepEqual((await call('get-latest-order-for-contact', { phone: '+85291234567' })).json, { found: false })
 	assert.equal((await call('get-latest-order-for-contact', { phone: 'soon' })).status, 400)
 })

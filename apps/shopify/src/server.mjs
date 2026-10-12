@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { ACTIONS } from './actions.mjs'
 import { tokenMatchesInstall, verifyEs256 } from './jwt.mjs'
 import { registerWebhooks, removeWebhooks } from './lifecycle.mjs'
+import { ProxyError } from './proxy.mjs'
 import { orderPhone } from './queries.mjs'
 import { ShopConflictError } from './store.mjs'
 import { TOPIC_TRIGGERS, mapCheckout, mapFulfillment, mapOrder, verifyShopifyHmac } from './shopify.mjs'
@@ -12,6 +13,8 @@ export const MAX_SHOPIFY_BODY_BYTES = 1024 * 1024
 const OUTBOUND_TIMEOUT_MS = 10_000
 // a request body must arrive within this; a slow drip can't hold a socket and buffers
 export const BODY_TIMEOUT_MS = 10_000
+// webhook deliveries in flight at once; beyond it Shopify gets a 503 and retries later
+export const MAX_PENDING = 200
 // action ids are manifest slugs; anything else (e.g. a decoded '/') is refused up front
 const ACTION_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -93,6 +96,8 @@ export function createApp(deps) {
 	const bodyTimeoutMs = deps.bodyTimeoutMs || BODY_TIMEOUT_MS
 	const retryDelays = deps.retryDelaysMs || [1000, 5000, 30_000]
 	const log = deps.log || (() => {})
+	const maxPending = deps.maxPending || MAX_PENDING
+	let stopping = false
 	// webhook work that outlives its response; tests (and shutdown) await it via server.drain()
 	const pending = new Set()
 
@@ -156,8 +161,14 @@ export function createApp(deps) {
 		try {
 			res = await handler({ input: body?.input, settings: body?.settings, installationId, proxy })
 		} catch(err) {
-			log({ msg: 'action failed', actionId, installationId, reason: `${err.message}`.slice(0, 200) })
-			throw new HttpError(502, 'shopify unavailable')
+			// 502 only for the proxy / Shopify; anything else is our bug
+			if(err instanceof ProxyError) {
+				log({ msg: 'action failed upstream', actionId, installationId, reason: `${err.message}`.slice(0, 200) })
+				throw new HttpError(502, 'shopify unavailable')
+			}
+
+			log({ msg: 'action crashed (bug)', actionId, installationId, reason: `${err.message}`.slice(0, 200) })
+			throw new HttpError(500, 'internal error')
 		}
 
 		if(res.error) {
@@ -192,8 +203,21 @@ export function createApp(deps) {
 			const subs = await registerWebhooks({ proxy, store, installationId, publicUrl })
 			return { status: 200, body: { ok: true, webhooks: subs.length }, installationId }
 		} catch(err) {
-			log({ msg: 'webhook registration failed', installationId, reason: `${err.message}`.slice(0, 200) })
-			throw new HttpError(502, 'could not register webhooks') // so bots can retry the event
+			if(err instanceof ProxyError) {
+				log({ msg: 'webhook registration failed upstream', installationId, reason: `${err.message}`.slice(0, 200) })
+				throw new HttpError(502, 'could not register webhooks') // so bots can retry the event
+			}
+
+			log({ msg: 'connected crashed (bug)', installationId, reason: `${err.message}`.slice(0, 200) })
+			throw new HttpError(500, 'internal error')
+		}
+	}
+
+	const track = promise => {
+		const job = promise.finally(() => pending.delete(job))
+		pending.add(job)
+		if(pending.size >= maxPending * 0.8) {
+			log({ msg: 'delivery backlog high', pending: pending.size, max: maxPending })
 		}
 	}
 
@@ -225,16 +249,20 @@ export function createApp(deps) {
 			return { status: 200, body: { ignored: 'not delivered' }, installationId }
 		}
 
+		// too much in flight (or shutting down): Shopify retries a 503, so nothing is lost
+		if(stopping || pending.size >= maxPending) {
+			log({ msg: 'busy, webhook refused', installationId, pending: pending.size, stopping })
+			throw new HttpError(503, 'busy')
+		}
+
 		const key = `wh:${webhookId}`
 		if(!store.claim(installationId, key, now())) {
 			return { status: 200, body: { duplicate: true }, installationId }
 		}
 
 		// answer now (Shopify allows 5 s), deliver after
-		const job = processWebhook({ installationId, topic, webhookId, data, keys: [key] })
-			.catch(err => log({ msg: 'webhook processing crashed', installationId, topic, reason: `${err.message}`.slice(0, 200) }))
-			.finally(() => pending.delete(job))
-		pending.add(job)
+		track(processWebhook({ installationId, topic, webhookId, data, keys: [key] })
+			.catch(err => log({ msg: 'webhook processing crashed (bug)', installationId, topic, reason: `${err.message}`.slice(0, 200) })))
 		return { status: 200, body: { accepted: true }, installationId }
 	}
 
@@ -275,25 +303,67 @@ export function createApp(deps) {
 			keys.push(once)
 		}
 
-		try {
-			await sendTrigger(installationId, trigger, webhookId, mapped.payload)
-			log({ msg: 'trigger sent', installationId, topic, trigger })
-		} catch(err) {
-			// give the claims back so a later delivery of the same thing can try again
+		// persisted until bots accepts it, so a restart or deploy replays it instead of dropping it
+		const body = JSON.stringify(mapped.payload)
+		if(Buffer.byteLength(body) > MAX_BODY_BYTES) {
 			keys.forEach(k => store.release(installationId, k))
-			log({ msg: 'trigger failed', installationId, topic, trigger, reason: err.message })
+			log({ msg: 'trigger failed', installationId, topic, trigger, reason: 'trigger payload too large' })
+			return
+		}
+
+		const rowId = store.enqueue(installationId, trigger, webhookId, body, now())
+		if(rowId === undefined) {
+			log({ msg: 'outbox full, trigger not persisted', installationId, trigger })
+		}
+
+		const outcome = await deliver({ id: rowId, installationId, triggerId: trigger, eventId: webhookId, body }, { topic })
+		// not delivered and not kept for replay: give the claims back so a later delivery can try again
+		if(outcome === 'refused' || (outcome === 'kept' && rowId === undefined)) {
+			keys.forEach(k => store.release(installationId, k))
 		}
 	}
 
-	async function sendTrigger(installationId, trigger, eventId, payload) {
-		const secret = store.currentSecret(installationId)
-		if(!secret) {
-			throw new Error('installation gone')
+	/** send one trigger: 'sent', 'refused' (final, dropped) or 'kept' (transient failure, left in the outbox for replay) */
+	async function deliver(row, { topic } = {}) {
+		const meta = { installationId: row.installationId, topic, trigger: row.triggerId }
+		let failed = false
+		try {
+			await sendTrigger(row)
+			log({ msg: 'trigger sent', ...meta })
+		} catch(err) {
+			log({ msg: 'trigger failed', ...meta, reason: err.message, permanent: Boolean(err.permanent) })
+			if(!err.permanent && row.id !== undefined) {
+				return 'kept'
+			}
+
+			failed = true
 		}
 
-		const outBody = JSON.stringify(payload)
-		if(Buffer.byteLength(outBody) > MAX_BODY_BYTES) {
-			throw new Error('trigger payload too large')
+		if(row.id !== undefined) {
+			store.dequeue(row.id)
+		}
+
+		return failed ? 'refused' : 'sent'
+	}
+
+	/** boot: re-send what an earlier run left in the outbox (call before listening) */
+	function replay() {
+		const rows = store.pendingTriggers(now())
+		if(rows.length) {
+			log({ msg: 'replaying undelivered triggers', count: rows.length })
+		}
+
+		for(const row of rows) {
+			track(deliver(row, { topic: 'replay' }).catch(err => log({ msg: 'replay crashed (bug)', reason: `${err.message}`.slice(0, 200) })))
+		}
+	}
+
+	async function sendTrigger({ installationId, triggerId, eventId, body }) {
+		const secret = store.currentSecret(installationId)
+		if(!secret) {
+			const err = new Error('installation gone')
+			err.permanent = true
+			throw err
 		}
 
 		let lastErr
@@ -304,15 +374,15 @@ export function createApp(deps) {
 
 			try {
 				const res = await doFetch(
-					`${botsUrl.replace(/\/+$/, '')}/apps/triggers/${installationId}/${trigger}`,
+					`${botsUrl.replace(/\/+$/, '')}/apps/triggers/${installationId}/${triggerId}`,
 					{
 						method: 'POST',
 						headers: {
 							'content-type': 'application/json',
-							'x-chatdaddy-event-id': eventId, // bots de-dupes on it, so a retry never double-fires
-							'x-chatdaddy-signature': signAppToBots(secret, eventId, outBody, now()),
+							'x-chatdaddy-event-id': eventId, // bots de-dupes on it, so a retry or replay never double-fires
+							'x-chatdaddy-signature': signAppToBots(secret, eventId, body, now()),
 						},
-						body: outBody,
+						body,
 						redirect: 'error',
 						signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
 					}
@@ -322,8 +392,10 @@ export function createApp(deps) {
 				}
 
 				lastErr = new Error(`bots responded ${res.status}`)
-				if(res.status >= 400 && res.status < 500 && res.status !== 429) {
-					throw lastErr // a client error will not get better
+				// a client error will not get better
+				lastErr.permanent = res.status >= 400 && res.status < 500 && res.status !== 429
+				if(lastErr.permanent) {
+					throw lastErr
 				}
 			} catch(err) {
 				if(err === lastErr) {
@@ -372,7 +444,6 @@ export function createApp(deps) {
 			throw new HttpError(404, 'not found')
 		}
 
-		let m
 		if(path === '/installed') {
 			return handshake(req)
 		}
@@ -385,8 +456,9 @@ export function createApp(deps) {
 			return connected(req)
 		}
 
-		if((m = /^\/actions\/([^/]+)$/.exec(path))) {
-			const actionId = decodeURIComponent(m[1])
+		const actionMatch = /^\/actions\/([^/]+)$/.exec(path)
+		if(actionMatch) {
+			const actionId = decodeURIComponent(actionMatch[1])
 			if(!ACTION_ID.test(actionId)) {
 				throw new HttpError(404, 'unknown action')
 			}
@@ -394,8 +466,9 @@ export function createApp(deps) {
 			return action(req, actionId)
 		}
 
-		if((m = /^\/shopify\/webhook\/([^/]+)$/.exec(path))) {
-			return shopifyWebhook(req, decodeURIComponent(m[1]))
+		const webhookMatch = /^\/shopify\/webhook\/([^/]+)$/.exec(path)
+		if(webhookMatch) {
+			return shopifyWebhook(req, decodeURIComponent(webhookMatch[1]))
 		}
 
 		throw new HttpError(404, 'not found')
@@ -451,6 +524,17 @@ export function createApp(deps) {
 		})
 		res.end(text)
 	})
+	server.replay = replay
+	/** stop accepting work, then wait up to `waitMs` for deliveries in flight (the rest stay in the outbox) */
+	server.shutdown = async(waitMs = 10_000) => {
+		stopping = true
+		server.close()
+		server.closeIdleConnections()
+		let timer
+		await Promise.race([server.drain(), new Promise(r => { timer = setTimeout(r, waitMs) })])
+		clearTimeout(timer)
+	}
+
 	server.drain = async() => {
 		while(pending.size) {
 			await Promise.all([...pending])
