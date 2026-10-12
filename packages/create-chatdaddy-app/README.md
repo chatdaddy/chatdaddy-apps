@@ -7,6 +7,7 @@ The builder kit for ChatDaddy apps. Three commands, no runtime dependencies, Nod
 | `init <dir>` | Scaffold a small, working app: manifest, server, one action, one trigger, tests. |
 | `validate [manifest.json]` | Check a manifest exactly as ChatDaddy does when you publish it. |
 | `publish [manifest.json] --version <v> [--base-url <https url>]` | Validate, register the app if new, and publish a version. Needs `CHATDADDY_TOKEN` (a token with `APPS_DEVELOP`; its team owns the app). Uses appstore `appGet`, `appCreate`, `appVersionCreate`. `CHATDADDY_APPSTORE_URL` overrides the API base. |
+| `set-client <app-dir> --connection <id> [--client-id <id>] [--secret-stdin]` | Register the provider's OAuth client for an `oauth2` connection (see below). |
 | `dev` | Stand in for ChatDaddy on your machine: install your app, call its actions, receive its triggers. No account needed. |
 
 ## Getting it
@@ -173,3 +174,19 @@ handshake, action call and trigger delivery against the scaffolded app in-proces
 
 The mutation check backs the sources up (and confirms the backup by hash), then for each guard (validator rules, signature checks, the dev-key
 production switch, `init`'s overwrite refusal and more) disables it, requires the suite to go red, restores the file, and finally diffs the tree against the backup.
+
+## OAuth client for an `oauth2` connection
+
+An app with an `oauth2` connection needs its developer to register the provider's OAuth client with ChatDaddy once (bots stores the secret sealed, write-only):
+
+```sh
+export CHATDADDY_TOKEN=...                 # APPS_DEVELOP; its team must own the app
+export CHATDADDY_OAUTH_CLIENT_ID=...       # or --client-id
+export CHATDADDY_OAUTH_CLIENT_SECRET=...   # or: printf %s "$SECRET" | create-chatdaddy-app set-client ... --secret-stdin
+create-chatdaddy-app set-client ./apps/shopify --connection shopify
+```
+
+There is deliberately no secret flag (it would land in shell history). `CHATDADDY_BOTS_URL` overrides the API base (default `https://api.chatdaddy.tech/bots`). It calls bots `appOAuthClientPut`, `PUT /apps/{appId}/oauth-clients/{connectionId}`, and prints `OAuth client set for <appId> / <connectionId>`.
+
+- **Provider redirect URL:** the ChatDaddy dashboard callback, `https://<dashboard-host>/apps/connect/callback`. The host is set per environment by ChatDaddy; for beta, ask ChatDaddy.
+- **Shopify compliance URL** (pending: bots PR chatdaddy/chatdaddy-service-bots#394, not merged yet): once merged, point all three Shopify GDPR topics at bots `POST /apps/{appId}/compliance/shopify` (public, authenticated by Shopify's HMAC), e.g. `https://api.chatdaddy.tech/bots/apps/<appId>/compliance/shopify`.

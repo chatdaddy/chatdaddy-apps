@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util'
 import { runDev } from './dev/repl.mjs'
 import { InitError, init } from './init.mjs'
 import { publish } from './publish.mjs'
+import { setClient } from './set-client.mjs'
 import { CATALOGUE_SOURCE, validateManifest } from './validate/index.mjs'
 
 export const MAX_MANIFEST_BYTES = 1024 * 1024
@@ -19,6 +20,9 @@ usage:
       check a manifest the way ChatDaddy does when you publish (default: ./chatdaddy-app.json)
   create-chatdaddy-app publish [manifest.json] --version <v> [--base-url https://...]
       validate, register the app if new, and publish a version (needs CHATDADDY_TOKEN; --base-url sets handler.baseUrl)
+  create-chatdaddy-app set-client <app-dir> --connection <id> [--client-id <id>] [--secret-stdin]
+      register the provider's OAuth client for an oauth2 connection (needs CHATDADDY_TOKEN; client id from
+      --client-id or CHATDADDY_OAUTH_CLIENT_ID; secret from CHATDADDY_OAUTH_CLIENT_SECRET or stdin, never a flag)
   create-chatdaddy-app dev [--app http://localhost:3000] [--manifest chatdaddy-app.json]
                            [--port 4100] [--key-file .chatdaddy-dev/public-key.pem]
       stand in for ChatDaddy locally: install the app, call its actions, receive its triggers`
@@ -95,6 +99,17 @@ export async function main(argv, io = {}) {
 			return publish({
 				file: positionals[0] || 'chatdaddy-app.json', baseUrl: values['base-url'], version: values.version,
 				out: stdout, err: stderr,
+			})
+		}
+
+		if(command === 'set-client') {
+			const { values, positionals } = parseArgs({
+				args: rest, allowPositionals: true,
+				options: { connection: { type: 'string' }, 'client-id': { type: 'string' }, 'secret-stdin': { type: 'boolean' } },
+			})
+			return setClient({
+				appDir: positionals[0], connection: values.connection, clientId: values['client-id'],
+				secretStdin: values['secret-stdin'], stdin: io.stdin || process.stdin, out: stdout, err: stderr,
 			})
 		}
 
