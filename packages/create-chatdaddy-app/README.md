@@ -76,18 +76,19 @@ It is a dependency-free port of ChatDaddy's publish-time validation: the same tw
 1. **JSON Schema (draft-07)**: shapes, required fields, lengths, patterns, `https://` URLs, enums.
 2. **Semantic checks**: scope names must exist **and be app-grantable**, `eventSubscriptions` must be real event names, ids must be unique inside each array, and URLs and hosts must not be private or loopback (so `http://localhost` is rejected at publish; use `dev` for local testing). At least one scope is required.
 3. **Connections** (`connections[]`): the rules live in `src/validate/connections.mjs`, which is the source of truth; in short:
-   - An `apiKey` connection needs a `headerName` and may set a `headerPrefix` (printable ASCII only). An `oauth2` one needs `authUrl` and `tokenUrl`, and the hosts of those two URLs must be listed in `hosts` as exact hosts.
+   - An `apiKey` connection needs a `headerName` and may set a `headerPrefix` (printable ASCII only). An `oauth2` one needs `authUrl` and `tokenUrl`, and the hosts of those two URLs must be listed in `hosts` as exact hosts, or be the connection's own host template on a `TENANT_SUFFIX_ALLOWLIST` suffix (`https://{shop}.myshopify.com/admin/oauth/authorize`). An optional `flavor` (`generic` default, or `shopify`) names the provider quirks the platform applies.
    - **Exact hosts** must be bare lowercase hostnames that `new URL()` leaves unchanged: no port, path, `user@`, wildcard, upper case or trailing dot, and never an IP address in any form (`127.0.0.1`, `127.1`, `2130706433`, `[::1]`).
    - `hosts` may also hold **one host template**, `{<inputId>}.<suffix>`. The placeholder is the whole leftmost label and names an entry of `inputs[]` (at most 3). The suffix needs at least two lowercase ASCII labels, a last label that is not all digits, and must survive `new URL()` unchanged. It must not be a public suffix from the vendored Public Suffix List (`co.uk`, `github.io`, `herokuapp.com` and so on), except the provider tenant domains in `TENANT_SUFFIX_ALLOWLIST` (`myshopify.com`), so `{shop}.myshopify.com` works.
    - `headerName` and `forwardHeaders[]` must be valid header names and may not be any of `DENIED_HEADERS` / `DENIED_HEADER_PREFIXES`: `host`, `cookie`, `set-cookie`, `connection`, `keep-alive`, `transfer-encoding`, `content-length`, `te`, `upgrade`, `expect`, `forwarded`, `via`, `x-real-ip`, `x-original-url`, `x-rewrite-url`, `x-http-method-override`, `x-http-method`, `x-method-override`, `proxy-*` and `x-forwarded-*`. `authorization` is allowed only as the connection's own `headerName`.
    - An input's `pattern` is advisory (it must compile and be at most 200 characters); the server enforces its own label rule, which `isValidHostLabel` in `src/validate/hosts.mjs` implements.
 
-The scope and event lists are a snapshot of the public [`chatdaddy/typescript-client`](https://github.com/chatdaddy/typescript-client).
+The scope list is a snapshot of `artifacts/scopes.json` in `chatdaddy/openapi` (where new scopes land first); the event list is a snapshot of the public [`chatdaddy/typescript-client`](https://github.com/chatdaddy/typescript-client).
 They are only as current as the last sync; if ChatDaddy adds a scope you cannot yet use here, regenerate them:
 
 ```
 node scripts/sync-scopes.mjs               # from GitHub, branch main
 node scripts/sync-scopes.mjs --local <path to a typescript-client clone>
+git -C <openapi clone> fetch origin && node scripts/sync-scopes.mjs --openapi <path to an openapi clone>   # scopes from openapi origin/main
 ```
 
 The public suffix check uses a snapshot of the [Public Suffix List](https://publicsuffix.org/list/) (ICANN and private sections), `src/data/public-suffix.json`:

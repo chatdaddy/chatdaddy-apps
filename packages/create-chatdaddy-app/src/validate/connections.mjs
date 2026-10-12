@@ -79,6 +79,12 @@ function isIpLiteral(host) {
 	return /^\[.*\]$/.test(host) || /^(?:[0-9]+|0x[0-9a-f]*)$/i.test(host.slice(host.lastIndexOf('.') + 1))
 }
 
+/** a `hosts[]` template whose suffix is on the tenant allowlist */
+function isAllowlistedTemplate(host) {
+	const match = typeof host === 'string' ? TEMPLATE.exec(host) : null
+	return !!match && TENANT_SUFFIX_ALLOWLIST.includes(match[2])
+}
+
 /** check one `hosts[]` template; returns the error messages (none if it is sound) */
 function templateProblems(host, inputIds) {
 	const match = TEMPLATE.exec(host)
@@ -250,13 +256,15 @@ export function validateConnections(connections, errors) {
 
 		const base = `/connections/${i}`
 		const exactHosts = checkHosts(c, base, checkInputs(c, base, add), add)
+		const tenantTemplates = new Set((Array.isArray(c.hosts) ? c.hosts : []).filter(isAllowlistedTemplate))
 
-		// oauth2: the auth and token endpoints must be exact hosts of this connection
+		// oauth2: the auth and token endpoints must be exact hosts of this connection, or the
+		// connection's own template on an allowlisted tenant suffix (`{shop}.myshopify.com`)
 		if(c.type === 'oauth2') {
 			for(const field of ['authUrl', 'tokenUrl']) {
 				const url = c[field]
-				if(typeof url === 'string' && url && !exactHosts.has(normaliseHost(url))) {
-					add(`${base}/${field}`, `host of ${field} ("${normaliseHost(url)}") must be listed in hosts as an exact host (a host template does not count)`)
+				if(typeof url === 'string' && url && !exactHosts.has(normaliseHost(url)) && !tenantTemplates.has(normaliseHost(url))) {
+					add(`${base}/${field}`, `host of ${field} ("${normaliseHost(url)}") must be listed in hosts as an exact host (a host template does not count except on a tenant suffix: ${TENANT_SUFFIX_ALLOWLIST.join(', ')})`)
 				}
 			}
 		}

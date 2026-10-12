@@ -135,6 +135,20 @@ export const validConnectionVariants = [
 			hosts: ['login.acme.com'],
 		},
 	},
+	{
+		name: 'oauth2 shopify flavor with auth and token on the allowlisted {shop}.myshopify.com template',
+		connection: {
+			id: 'shopify',
+			provider: 'shopify',
+			type: 'oauth2',
+			flavor: 'shopify',
+			authUrl: 'https://{shop}.myshopify.com/admin/oauth/authorize',
+			tokenUrl: 'https://{shop}.myshopify.com/admin/oauth/access_token',
+			scopes: ['read_orders'],
+			hosts: ['{shop}.myshopify.com'],
+			inputs: [{ id: 'shop', label: 'Shop' }],
+		},
+	},
 ]
 
 const full = validFullManifest
@@ -215,6 +229,22 @@ export const invalidManifestFixtures = [
 		manifest: withConnection({ ...oauth, hosts: ['shopify.com', '{tenant}.acme-cloud.com'], inputs: [{ id: 'tenant', label: 'x' }], tokenUrl: 'https://eu.acme-cloud.com/token' }),
 		expect: 'a host template does not count',
 	},
+	{
+		rule: 'oauth2 template auth/token host on a non-allowlisted suffix is refused',
+		manifest: withConnection({ ...oauth, hosts: ['{shop}.acme-cloud.com'], inputs: [{ id: 'shop', label: 'x' }], authUrl: 'https://{shop}.acme-cloud.com/a', tokenUrl: 'https://{shop}.acme-cloud.com/t' }),
+		expect: '/connections/0/authUrl',
+	},
+	{
+		rule: 'oauth2 template placeholder must be a declared input',
+		manifest: withConnection({ ...oauth, hosts: ['{shop}.myshopify.com'], inputs: [{ id: 'other', label: 'x' }], authUrl: 'https://{shop}.myshopify.com/a', tokenUrl: 'https://{shop}.myshopify.com/t' }),
+		expect: 'does not name a declared input',
+	},
+	{
+		rule: 'oauth2 template authUrl must be https',
+		manifest: withConnection({ ...oauth, hosts: ['{shop}.myshopify.com'], inputs: [{ id: 'shop', label: 'x' }], authUrl: 'http://{shop}.myshopify.com/a', tokenUrl: 'https://{shop}.myshopify.com/t' }),
+		expect: '/connections/0/authUrl',
+	},
+	{ rule: 'connection flavor must be a known flavor', manifest: withConnection({ ...oauth, flavor: 'google' }), expect: '/connections/0/flavor' },
 	// ---- connections: header floor ----
 	{ rule: 'headerName may not be a denied header (Host)', manifest: withConnection({ ...apiKey, headerName: 'Host' }), expect: 'header "Host" is not allowed' },
 	{ rule: 'headerName denylist is case-insensitive (CoOkIe)', manifest: withConnection({ ...apiKey, headerName: 'CoOkIe' }), expect: 'is not allowed' },
