@@ -39,6 +39,7 @@ const server = createApp({
 	store,
 	adminToken,
 	botsUrl: need('CHATDADDY_BOTS_URL'),
+	log: ({ msg, ...rest }) => log('info', msg, rest),
 })
 const port = Number(process.env.PORT || 3000)
 server.listen(port, () => log('info', 'app-shopify-order listening', { port }))
