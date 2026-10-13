@@ -15,7 +15,7 @@ scopes = "read_customers,read_fulfillments,read_orders,write_orders"
 redirect_urls = ["https://www.beta.chatdaddy.tech/apps/connect/callback"]
 
 [webhooks]
-api_version = "2027-01"
+api_version = "2026-10"
 
   # GDPR topics are app-level and handled by bots (P5 A-7, bots #394). Per-shop order/customer
   # webhooks are registered by the app itself on `connected`, so none are listed here.
