@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 
 : "${FLY_API_TOKEN:?FLY_API_TOKEN is required}"
 : "${CHATDADDY_BOTS_URL:?CHATDADDY_BOTS_URL is required (the bots base URL)}"
-: "${SHOPIFY_CLIENT_SECRET:?SHOPIFY_CLIENT_SECRET is required (the Shopify app's client secret, from the Partner dashboard)}"
+: "${SHOPIFY_CLIENT_SECRET:?SHOPIFY_CLIENT_SECRET is required (the client secret of the Shopify app, from the Partner dashboard)}"
 APP="${FLY_APP:-chatdaddy-app-shopify}"
 REGION="${FLY_REGION:-sin}"
 VOLUME=shopify_data
