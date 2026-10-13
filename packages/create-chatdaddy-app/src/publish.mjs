@@ -83,6 +83,12 @@ export async function publish({ file, baseUrl, version, env = process.env, fetch
 
 	const fail = (what, res) => {
 		err(`${what} failed: HTTP ${res.status} ${(res.json?.message || res.text || '').slice(0, 300)}`)
+		// appVersionCreate's 400 carries the validator's reasons in data.errors; without them the author can't fix anything
+		const errors = Array.isArray(res.json?.data?.errors) ? res.json.data.errors : []
+		for(const e of errors.slice(0, 20)) {
+			err(`  ${String(e?.path ?? '')}: ${String(e?.message ?? '').slice(0, 300)}`)
+		}
+
 		return 1
 	}
 
