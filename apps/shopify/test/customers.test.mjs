@@ -183,7 +183,10 @@ test('getAppToken: signed like a trigger delivery, exact body, cached to expires
 	assert.equal(init.body, JSON.stringify({ purpose: 'app-token', installationId: INST_A }))
 	assert.equal(init.headers['content-type'], 'application/json')
 	const eventId = init.headers['x-chatdaddy-event-id']
-	assert.equal(init.headers['x-chatdaddy-signature'], signAppToBots(SIGNING_SECRET, eventId, init.body, Math.floor(clockMs / 1000)))
+	const sig = init.headers['x-chatdaddy-signature']
+	const ts = Number(/^t=(\d+),/.exec(sig)[1])
+	assert.ok(Math.abs(ts - Date.now() / 1000) < 5, 'signed with the real clock')
+	assert.equal(sig, signAppToBots(SIGNING_SECRET, eventId, init.body, ts))
 
 	clockMs += 200_000
 	assert.equal(await get(INST_A), 'tok1', 'cache hit before expiresAt - 60 s')
@@ -197,4 +200,13 @@ test('getAppToken: a non-2xx answer throws its status (and never the token or bo
 	await t.handshake()
 	await assert.rejects(get(INST_A), err => err instanceof TokenError && err.status === 429 && !/leak/.test(err.message))
 	await assert.rejects(createTokenProvider({ store: t.store, botsUrl: BOTS_URL })(INST_B), TokenError) // no secret for an unknown installation
+})
+
+test('contacts client: refuses an oversized upsert and caps patch ids at 20', async() => {
+	const calls = []
+	const c = createContactsClient({ baseUrl: 'https://im.test', fetch: async(url, init) => { calls.push(url); return new Response('{}') } })
+	await assert.rejects(c.upsert('tok', Array.from({ length: 1001 }, () => ({}))), /refusing/)
+	assert.equal(calls.length, 0)
+	await c.patchTags('tok', Array.from({ length: 30 }, (_, i) => `id${i}`), [])
+	assert.equal(calls[0].split('contacts=').length - 1, 20)
 })

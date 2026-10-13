@@ -12,8 +12,11 @@ export const CHATDADDY_IM_URL = 'https://api.chatdaddy.tech/im'
 // ponytail: one amount in the shop's own currency, not converted; make it a manifest setting when a merchant asks
 export const VIP_TOTAL_SPENT = 500
 export const REPEAT_ORDERS = 2
-export const BACKFILL_PAGES = 5 // x PAGE_SIZE = the 250 most recently updated customers
+// The backfill is bounded on purpose: BACKFILL_PAGES x PAGE_SIZE = 5 x 50 = 250 customers, at most 5 sequential
+// GraphQL calls. Keep these constants together and keep them constants (not settings).
+export const BACKFILL_PAGES = 5
 const PAGE_SIZE = 50
+export const MAX_UPSERT = 1000 // backfill sends at most BACKFILL_PAGES x PAGE_SIZE = 250
 
 export const FIELD_NAMES = [
 	'shopify total spent', 'shopify order count', 'shopify last order date', 'shopify marketing consent',
@@ -23,15 +26,19 @@ export const OWNED = [...FIELD_NAMES, ...TAG_NAMES]
 
 const str = v => (v === undefined || v === null ? '' : `${v}`.trim())
 
+/** the customer's usable E.164 phone (own phone, then default address), or undefined */
+export function customerPhone(c) {
+	const addr = c?.default_address
+	return [[c?.phone, addr?.country_code], [addr?.phone, addr?.country_code]].map(([p, cc]) => normalizePhone(p, cc)).find(Boolean)
+}
+
 /** @returns {{ contact: object } | { skip: string }} contact = one `contacts[]` item of POST /contacts/upsert */
 export function customerToContact(c) {
 	if(!c || typeof c !== 'object') {
 		return { skip: 'no customer' }
 	}
 
-	const addr = c.default_address
-	const phone = [[c.phone, addr?.country_code], [addr?.phone, addr?.country_code]]
-		.map(([p, cc]) => normalizePhone(p, cc)).find(Boolean)
+	const phone = customerPhone(c)
 	if(!phone) {
 		return { skip: 'no usable phone number' }
 	}
@@ -95,6 +102,7 @@ export async function withLastOrderDate(proxy, installationId, customer) {
 export async function recentCustomers(proxy, installationId) {
 	const out = []
 	let after = null
+	// bounded on purpose (BACKFILL_PAGES), sequential because each page needs the previous cursor
 	for(let page = 0; page < BACKFILL_PAGES; page++) {
 		const { customers } = await gql(proxy, installationId, `query($after: String) {
 			customers(first: ${PAGE_SIZE}, after: $after, sortKey: UPDATED_AT, reverse: true) {
@@ -131,6 +139,10 @@ export function createContactsClient({ fetch: doFetch = fetch, baseUrl = CHATDAD
 	return {
 		/** POST /contacts/upsert (CONTACTS_CREATE), up to 15000 per call; chunked at 500 */
 		async upsert(token, contacts) {
+			if(contacts.length > MAX_UPSERT) {
+				throw new ContactsError(`refusing to upsert ${contacts.length} contacts at once (max ${MAX_UPSERT})`)
+			}
+
 			for(let i = 0; i < contacts.length; i += 500) {
 				await call(token, 'POST', '/contacts/upsert', { contacts: contacts.slice(i, i + 500) })
 			}
@@ -142,7 +154,7 @@ export function createContactsClient({ fetch: doFetch = fetch, baseUrl = CHATDAD
 		},
 		/** PATCH /contacts (CONTACTS_UPDATE): ponytail: repeated `contacts=` for the deepObject array is unverified */
 		patchTags(token, ids, tags) {
-			const qs = ids.map(id => `contacts=${encodeURIComponent(id)}`).join('&')
+			const qs = ids.slice(0, 20).map(id => `contacts=${encodeURIComponent(id)}`).join('&')
 			return call(token, 'PATCH', `/contacts?${qs}`, { patch: { tags } })
 		},
 	}
@@ -194,7 +206,7 @@ export function createTokenProvider({ store, botsUrl, fetch: doFetch = fetch, no
 			headers: {
 				'content-type': 'application/json',
 				'x-chatdaddy-event-id': eventId,
-				'x-chatdaddy-signature': signAppToBots(secret, eventId, body, Math.floor(nowMs() / 1000)),
+				'x-chatdaddy-signature': signAppToBots(secret, eventId, body, Math.floor(Date.now() / 1000)) // real clock: bots checks it; nowMs is for cache expiry only,
 			},
 		})
 		if(res.status < 200 || res.status >= 300) {

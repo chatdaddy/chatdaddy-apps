@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { ACTIONS } from './actions.mjs'
 import { tokenMatchesInstall, verifyEs256 } from './jwt.mjs'
-import { createContactsClient, createTokenProvider, customerToContact, recentCustomers, redactCustomer, withLastOrderDate } from './customers.mjs'
+import { createContactsClient, createTokenProvider, customerPhone, customerToContact, recentCustomers, redactCustomer, withLastOrderDate } from './customers.mjs'
 import { registerWebhooks, removeWebhooks } from './lifecycle.mjs'
 import { ProxyError } from './proxy.mjs'
 import { orderPhone } from './queries.mjs'
@@ -99,7 +99,7 @@ export function createApp(deps) {
 	const log = deps.log || (() => {})
 	const contacts = deps.contacts || createContactsClient({ fetch: doFetch, baseUrl: deps.chatdaddyApiUrl })
 	// Shopify webhooks and compliance events carry no app token: ask bots for one (bots #396)
-	const getAppToken = deps.getAppToken || createTokenProvider({ store, botsUrl, fetch: doFetch, nowMs: () => now() * 1000 })
+	const getAppToken = deps.getAppToken || createTokenProvider({ store, botsUrl, fetch: doFetch })
 	const maxPending = deps.maxPending || MAX_PENDING
 	let stopping = false
 	// webhook work that outlives its response; tests (and shutdown) await it via server.drain()
@@ -284,9 +284,8 @@ export function createApp(deps) {
 
 	/** customers/create and customers/update -> contact upsert. No token = nothing written (logged, never guessed). */
 	async function syncCustomer(installationId, topic, data) {
-		const mapped = customerToContact(data)
-		if(!mapped.contact) {
-			log({ msg: 'skipped', installationId, topic, reason: mapped.skip })
+		if(!customerPhone(data)) {
+			log({ msg: 'skipped', installationId, topic, reason: 'no usable phone number' })
 			return
 		}
 
@@ -305,7 +304,7 @@ export function createApp(deps) {
 			log({ msg: 'last order lookup failed', installationId, reason: `${err.message}`.slice(0, 200) })
 		}
 
-		await contacts.upsert(token, [customerToContact(customer).contact])
+		await contacts.upsert(token, [customerToContact(customer).contact]) // mapped once, after enrichment
 		log({ msg: 'customer synced', installationId, topic })
 	}
 
@@ -324,6 +323,10 @@ export function createApp(deps) {
 		const { installationId, raw } = await botsCall(req)
 		const body = parseJson(raw)
 		const inst = store.get(installationId)
+		if(!inst) {
+			throw new HttpError(404, 'unknown installation')
+		}
+
 		if(body?.event !== 'compliance' || body.installationId !== installationId || (inst.shop && body.shop !== inst.shop)) {
 			throw new HttpError(400, 'invalid body')
 		}
