@@ -1,11 +1,12 @@
 import { createServer } from 'node:http'
 import { ACTIONS } from './actions.mjs'
 import { tokenMatchesInstall, verifyEs256 } from './jwt.mjs'
+import { createContactsClient, createTokenProvider, customerPhone, customerToContact, recentCustomers, redactCustomer, withLastOrderDate } from './customers.mjs'
 import { registerWebhooks, removeWebhooks } from './lifecycle.mjs'
 import { ProxyError } from './proxy.mjs'
 import { orderPhone } from './queries.mjs'
 import { ShopConflictError } from './store.mjs'
-import { TOPIC_TRIGGERS, mapCheckout, mapFulfillment, mapOrder, verifyShopifyHmac } from './shopify.mjs'
+import { CUSTOMER_TOPICS, TOPIC_TRIGGERS, mapCheckout, mapFulfillment, mapOrder, verifyShopifyHmac } from './shopify.mjs'
 import { computeHandshakeAck, isValidEventId, signAppToBots, verifyBotsToApp, verifyUninstalled } from './signing.mjs'
 
 export const MAX_BODY_BYTES = 64 * 1024 // handshake / action calls, and bots' trigger cap
@@ -96,6 +97,9 @@ export function createApp(deps) {
 	const bodyTimeoutMs = deps.bodyTimeoutMs || BODY_TIMEOUT_MS
 	const retryDelays = deps.retryDelaysMs || [1000, 5000, 30_000]
 	const log = deps.log || (() => {})
+	const contacts = deps.contacts || createContactsClient({ fetch: doFetch, baseUrl: deps.chatdaddyApiUrl })
+	// Shopify webhooks and compliance events carry no app token: ask bots for one (bots #396)
+	const getAppToken = deps.getAppToken || createTokenProvider({ store, botsUrl, fetch: doFetch })
 	const maxPending = deps.maxPending || MAX_PENDING
 	let stopping = false
 	// webhook work that outlives its response; tests (and shutdown) await it via server.drain()
@@ -141,7 +145,8 @@ export function createApp(deps) {
 			throw new HttpError(401, 'invalid signature')
 		}
 
-		return { installationId, raw }
+		const auth = req.headers.authorization || ''
+		return { installationId, raw, token: auth.startsWith('Bearer ') ? auth.slice(7) : undefined }
 	}
 
 	// POST /actions/:actionId
@@ -182,7 +187,7 @@ export function createApp(deps) {
 	// ASSUMED contract (P5 A-6 is not built): signed like an action call, body
 	// { event: 'connected', installationId, connection: { id, inputs: { shop } } }.
 	async function connected(req) {
-		const { installationId, raw } = await botsCall(req)
+		const { installationId, raw, token } = await botsCall(req)
 		const body = parseJson(raw)
 		const shop = shopDomain(body?.connection?.inputs?.shop)
 		if(body?.event !== 'connected' || body.installationId !== installationId || !shop) {
@@ -201,6 +206,11 @@ export function createApp(deps) {
 
 		try {
 			const subs = await registerWebhooks({ proxy, store, installationId, publicUrl })
+			// the backfill runs after the response, like webhook work
+			if(token) {
+				track(backfill(installationId, token).catch(err => log({ msg: 'backfill failed', installationId, reason: `${err.message}`.slice(0, 200) })))
+			}
+
 			return { status: 200, body: { ok: true, webhooks: subs.length }, installationId }
 		} catch(err) {
 			if(err instanceof ProxyError) {
@@ -234,7 +244,7 @@ export function createApp(deps) {
 		}
 
 		const topic = `${req.headers['x-shopify-topic'] || ''}`
-		if(!Object.hasOwn(TOPIC_TRIGGERS, topic)) {
+		if(!Object.hasOwn(TOPIC_TRIGGERS, topic) && !CUSTOMER_TOPICS.includes(topic)) {
 			return { status: 200, body: { ignored: 'topic' }, installationId }
 		}
 
@@ -260,10 +270,93 @@ export function createApp(deps) {
 			return { status: 200, body: { duplicate: true }, installationId }
 		}
 
+		if(CUSTOMER_TOPICS.includes(topic)) {
+			track(syncCustomer(installationId, topic, data)
+				.catch(err => log({ msg: 'customer sync failed', installationId, topic, reason: `${err.message}`.slice(0, 200) })))
+			return { status: 200, body: { accepted: true }, installationId }
+		}
+
 		// answer now (Shopify allows 5 s), deliver after
 		track(processWebhook({ installationId, topic, webhookId, data, keys: [key] })
 			.catch(err => log({ msg: 'webhook processing crashed (bug)', installationId, topic, reason: `${err.message}`.slice(0, 200) })))
 		return { status: 200, body: { accepted: true }, installationId }
+	}
+
+	/** customers/create and customers/update -> contact upsert. No token = nothing written (logged, never guessed). */
+	async function syncCustomer(installationId, topic, data) {
+		if(!customerPhone(data)) {
+			log({ msg: 'skipped', installationId, topic, reason: 'no usable phone number' })
+			return
+		}
+
+		let token
+		try {
+			token = await getAppToken(installationId)
+		} catch(err) {
+			log({ msg: 'customer not synced: app token unavailable', installationId, topic, status: err.status })
+			return
+		}
+
+		let customer = data
+		try {
+			customer = await withLastOrderDate(proxy, installationId, data)
+		} catch(err) {
+			log({ msg: 'last order lookup failed', installationId, reason: `${err.message}`.slice(0, 200) })
+		}
+
+		await contacts.upsert(token, [customerToContact(customer).contact]) // mapped once, after enrichment
+		log({ msg: 'customer synced', installationId, topic })
+	}
+
+	async function backfill(installationId, token) {
+		const items = (await recentCustomers(proxy, installationId)).map(c => customerToContact(c).contact).filter(Boolean)
+		if(items.length) {
+			await contacts.upsert(token, items)
+		}
+
+		log({ msg: 'backfill done', installationId, synced: items.length })
+	}
+
+	// POST /compliance: Shopify's customers/data_request, customers/redact (and shop/redact if forwarded),
+	// forwarded by the platform (bots#394), signed like an action call
+	async function compliance(req) {
+		const { installationId, raw } = await botsCall(req)
+		const body = parseJson(raw)
+		const inst = store.get(installationId)
+		if(!inst) {
+			throw new HttpError(404, 'unknown installation')
+		}
+
+		if(body?.event !== 'compliance' || body.installationId !== installationId || (inst.shop && body.shop !== inst.shop)) {
+			throw new HttpError(400, 'invalid body')
+		}
+
+		if(body.topic === 'shop/redact') {
+			store.clearShop(installationId)
+			return { status: 200, body: { ok: true }, installationId }
+		}
+
+		if(body.topic !== 'customers/redact') {
+			// data_request: this app keeps no customer data of its own (the synced fields live on the ChatDaddy contact)
+			return { status: 200, body: { ok: true }, installationId }
+		}
+
+		let token
+		try {
+			token = await getAppToken(installationId)
+		} catch(err) {
+			log({ msg: 'customers/redact not applied: app token unavailable', installationId, status: err.status })
+			throw new HttpError(503, 'app token unavailable') // so Shopify retries
+		}
+
+		try {
+			const n = await redactCustomer(contacts, token, body.payload?.customer)
+			log({ msg: 'customers/redact applied', installationId, contacts: n })
+			return { status: 200, body: { ok: true }, installationId }
+		} catch(err) {
+			log({ msg: 'customers/redact failed upstream', installationId, reason: `${err.message}`.slice(0, 200) })
+			throw new HttpError(502, 'could not redact')
+		}
 	}
 
 	async function processWebhook({ installationId, topic, webhookId, data, keys }) {
@@ -456,6 +549,10 @@ export function createApp(deps) {
 			return connected(req)
 		}
 
+		if(path === '/compliance') {
+			return compliance(req)
+		}
+
 		const actionMatch = /^\/actions\/([^/]+)$/.exec(path)
 		if(actionMatch) {
 			const actionId = decodeURIComponent(actionMatch[1])
@@ -476,7 +573,7 @@ export function createApp(deps) {
 
 	// the route pattern, never the raw path; the installation id only when it is a UUID
 	const ROUTES = [
-		['/installed', /^\/installed$/], ['/uninstalled', /^\/uninstalled$/], ['/connected', /^\/connected$/],
+		['/installed', /^\/installed$/], ['/uninstalled', /^\/uninstalled$/], ['/connected', /^\/connected$/], ['/compliance', /^\/compliance$/],
 		['/healthz', /^\/healthz$/], ['/actions/:actionId', /^\/actions\/[^/]+$/],
 		['/shopify/webhook/:id', /^\/shopify\/webhook\/([^/]+)$/],
 	]

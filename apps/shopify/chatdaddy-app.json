@@ -98,7 +98,7 @@
           },
           "isCod": {
             "type": "boolean",
-            "description": "true for cash on delivery"
+            "description": "true for cash on delivery (gateway name matches 'cash on delivery' or 'cod'). Filter the COD confirmation flow on this."
           },
           "financialStatus": {
             "type": "string"
@@ -369,6 +369,72 @@
         {
           "propertyPath": "orderStatusUrl",
           "title": "Order status page",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "tag-order",
+      "title": "Tag order in Shopify",
+      "description": "Adds tags to a Shopify order, e.g. cod-confirmed. Comma-separate several tags.",
+      "inputProperties": [
+        {
+          "propertyPath": "orderId",
+          "title": "Order ID",
+          "type": "string",
+          "required": true
+        },
+        {
+          "propertyPath": "tags",
+          "title": "Tags (comma separated)",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "outputProperties": [
+        {
+          "propertyPath": "success",
+          "title": "Tagged",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "propertyPath": "message",
+          "title": "Error message",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "cancel-order",
+      "title": "Cancel order in Shopify",
+      "description": "Cancels a Shopify order with reason Customer changed or cancelled order, and puts the items back in stock. No refund unless asked; Shopify sends no cancellation email.",
+      "inputProperties": [
+        {
+          "propertyPath": "orderId",
+          "title": "Order ID",
+          "type": "string",
+          "required": true
+        },
+        {
+          "propertyPath": "refund",
+          "title": "Refund the payment (true/false, default false)",
+          "type": "boolean",
+          "required": false
+        }
+      ],
+      "outputProperties": [
+        {
+          "propertyPath": "success",
+          "title": "Cancelled",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "propertyPath": "message",
+          "title": "Error message",
           "type": "string",
           "required": false
         }

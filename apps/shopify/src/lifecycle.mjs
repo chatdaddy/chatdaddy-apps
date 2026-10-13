@@ -1,12 +1,12 @@
 // `connected` (the merchant finished Log in with Shopify) and uninstall: register / remove this
 // installation's webhook subscriptions through the connection proxy, one GraphQL request each.
 import { ProxyError, gql } from './proxy.mjs'
-import { TOPIC_TRIGGERS } from './shopify.mjs'
+import { CUSTOMER_TOPICS, TOPIC_TRIGGERS } from './shopify.mjs'
 
 const toEnum = topic => topic.toUpperCase().replace('/', '_') // orders/create -> ORDERS_CREATE
 
 // Filtered by our own callback URL (one per installation) and the app only ever subscribes to
-// the TOPIC_TRIGGERS topics, so this list holds at most 5 rows: no pagination needed. Asserted
+// the TOPIC_TRIGGERS and CUSTOMER_TOPICS topics, so this list holds at most 7 rows: no pagination needed. Asserted
 // below via hasNextPage, so a surprise fails loudly instead of silently creating duplicates.
 const LIST = `query($url: URL!) {
 	webhookSubscriptions(first: 50, callbackUrl: $url) {
@@ -30,7 +30,7 @@ export async function registerWebhooks({ proxy, store, installationId, publicUrl
 	const existing = listed?.nodes || []
 	const subs = []
 	const missing = []
-	for(const topic of Object.keys(TOPIC_TRIGGERS)) {
+	for(const topic of [...Object.keys(TOPIC_TRIGGERS), ...CUSTOMER_TOPICS]) {
 		const have = existing.find(w => w.topic === toEnum(topic) && w.endpoint?.callbackUrl === callbackUrl)
 		if(have) {
 			subs.push({ topic, id: have.id })

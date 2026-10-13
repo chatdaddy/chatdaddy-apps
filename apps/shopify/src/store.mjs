@@ -158,6 +158,14 @@ export class InstallationStore {
 		this.db.prepare('DELETE FROM installations WHERE installation_id = ?').run(installationId)
 	}
 
+	/** shop/redact: the shop is gone, so forget everything tied to it but keep the installation itself */
+	clearShop(installationId) {
+		this.db.prepare('DELETE FROM webhooks WHERE installation_id = ?').run(installationId)
+		this.db.prepare('DELETE FROM dedupe WHERE installation_id = ?').run(installationId)
+		this.db.prepare('DELETE FROM outbox WHERE installation_id = ?').run(installationId)
+		this.db.prepare('UPDATE installations SET shop = NULL WHERE installation_id = ?').run(installationId)
+	}
+
 	/** keep a trigger until bots accepts it; returns its row id, or undefined when the outbox is full */
 	enqueue(installationId, triggerId, eventId, body, nowS) {
 		this.db.prepare('DELETE FROM outbox WHERE created_at < ?').run(nowS - OUTBOX_TTL_S)

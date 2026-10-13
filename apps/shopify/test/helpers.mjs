@@ -73,17 +73,27 @@ export function fakeProxy() {
 	return p
 }
 
+/** recording fake of the ChatDaddy contacts client; `ids` is what findIds answers */
+export function fakeContacts() {
+	const c = { upserts: [], patches: [], finds: [], ids: ['c1'] }
+	c.upsert = async(token, items) => { c.upserts.push({ token, items }) }
+	c.findIds = async(token, q) => { c.finds.push({ token, q }); return c.ids }
+	c.patchTags = async(token, ids, tags) => { c.patches.push({ token, ids, tags }) }
+	return c
+}
+
 /** boots the app on an ephemeral port with a recording fake fetch (= bots) and fake proxy */
 export async function startApp(overrides = {}) {
 	const store = new InstallationStore(undefined)
 	const clock = { t: nowS() }
 	const botsCalls = []
-	const state = { response: () => new Response('{"fired":1}', { status: 202 }), throwError: undefined }
+	const state = { response: () => new Response('{"fired":1}', { status: 202 }), throwError: undefined, tokenError: undefined }
 	const logs = []
 	const proxy = fakeProxy()
+	const contacts = fakeContacts()
 	const server = createApp({
 		appId: APP_ID, publicKey: pem(chatdaddyKeys), store, shopifyClientSecret: CLIENT_SECRET, botsUrl: BOTS_URL,
-		publicUrl: PUBLIC_URL, proxy, now: () => clock.t, retryDelaysMs: [0, 0], log: l => logs.push(l),
+		publicUrl: PUBLIC_URL, proxy, contacts, getAppToken: async() => { if(state.tokenError) { throw state.tokenError } return 'app-tok' }, now: () => clock.t, retryDelaysMs: [0, 0], log: l => logs.push(l),
 		fetch: async(url, init) => {
 			botsCalls.push({ url, init, body: JSON.parse(init.body) })
 			if(state.throwError) {
@@ -116,10 +126,10 @@ export async function startApp(overrides = {}) {
 		{ authorization: `Bearer ${mintToken({ installationId })}` }
 	)
 	/** a call signed like bots -> app */
-	const botsPost = (path, body, { installationId = INST_A, secret = SIGNING_SECRET, label = 'bots' } = {}) => {
+	const botsPost = (path, body, { installationId = INST_A, secret = SIGNING_SECRET, label = 'bots', headers = {} } = {}) => {
 		const raw = JSON.stringify(body)
 		const sig = (label === 'bots' ? signBotsToApp : signUninstalled)(secret, raw, clock.t)
-		return post(path, raw, { 'x-chatdaddy-installation': installationId, 'x-chatdaddy-signature': sig })
+		return post(path, raw, { 'x-chatdaddy-installation': installationId, 'x-chatdaddy-signature': sig, ...headers })
 	}
 	/** a Shopify webhook, signed with `secret` unless `signature` is given */
 	const webhook = (installationId, topic, body, {
@@ -136,7 +146,7 @@ export async function startApp(overrides = {}) {
 		await botsPost('/connected', { event: 'connected', installationId: INST_A, connection: { id: 'shopify', inputs: { shop } } })
 	}
 	return {
-		server, base, store, clock, botsCalls, state, logs, proxy, post, handshake, botsPost, webhook, setup,
+		server, base, store, clock, botsCalls, state, logs, proxy, contacts, post, handshake, botsPost, webhook, setup,
 		drain: () => server.drain(),
 		close: () => { server.closeAllConnections(); return new Promise(r => server.close(r)) },
 	}

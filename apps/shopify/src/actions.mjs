@@ -1,7 +1,7 @@
 // Flow actions this app serves (declared in chatdaddy-app.json). Each is async and gets
 // ({ input, settings, installationId, proxy }); it returns { output } or { error }.
 import { normalizePhone } from './phone.mjs'
-import { checkoutStatus, latestOrderByPhone } from './queries.mjs'
+import { cancelOrder, checkoutStatus, latestOrderByPhone, tagOrder } from './queries.mjs'
 
 const s = v => (typeof v === 'string' || typeof v === 'number' ? `${v}`.trim() : '')
 
@@ -15,6 +15,27 @@ export const ACTIONS = {
 
 		const { isOpen, checkoutUrl } = await checkoutStatus(proxy, installationId, checkoutId)
 		return { output: { isOpen, checkoutUrl } }
+	},
+
+	/** COD flow: mark an order (e.g. "cod-confirmed") */
+	async 'tag-order'({ input, installationId, proxy }) {
+		const orderId = s(input?.orderId)
+		const tags = s(input?.tags).split(',').map(t => t.trim().slice(0, 40)).filter(Boolean).slice(0, 10)
+		if(!/^\d{1,20}$/.test(orderId) || !tags.length) {
+			return { error: 'orderId (the numeric id from the trigger) and at least one tag are required' }
+		}
+
+		return { output: await tagOrder(proxy, installationId, orderId, tags) }
+	},
+
+	/** COD flow: the customer replied "cancel" */
+	async 'cancel-order'({ input, installationId, proxy }) {
+		const orderId = s(input?.orderId)
+		if(!/^\d{1,20}$/.test(orderId)) {
+			return { error: 'orderId is required (the numeric id from the trigger)' }
+		}
+
+		return { output: await cancelOrder(proxy, installationId, orderId, { refund: input?.refund === true || s(input?.refund) === 'true' }) }
 	},
 
 	/** "where is my order": the contact's latest order, by phone */

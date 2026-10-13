@@ -17,7 +17,7 @@ afterEach(() => t.close())
 const connect = (shop = 'test-shop', opts) => t.botsPost(
 	'/connected', { event: 'connected', installationId: INST_A, connection: { id: 'shopify', inputs: { shop } } }, opts
 )
-const TOPICS = ['CHECKOUTS_CREATE', 'CHECKOUTS_UPDATE', 'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE', 'ORDERS_CREATE']
+const TOPICS = ['CHECKOUTS_CREATE', 'CHECKOUTS_UPDATE', 'CUSTOMERS_CREATE', 'CUSTOMERS_UPDATE', 'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE', 'ORDERS_CREATE']
 
 test('handshake stores the installation and acks; a wrong app is refused', async() => {
 	const ok = await t.handshake()
@@ -31,7 +31,7 @@ test('handshake stores the installation and acks; a wrong app is refused', async
 test('connected registers one webhook per topic at this installation\'s URL, and stores shop + ids', async() => {
 	await t.handshake()
 	const r = await connect('My-Store')
-	assert.deepEqual(r.json, { ok: true, webhooks: 5 })
+	assert.deepEqual(r.json, { ok: true, webhooks: 7 })
 	// one list request and ONE mutation request carrying all five creates (aliased, values as variables)
 	const creates = t.proxy.calls.filter(c => /webhookSubscriptionCreate/.test(c.query))
 	assert.equal(creates.length, 1)
@@ -47,7 +47,7 @@ test('connected registers one webhook per topic at this installation\'s URL, and
 
 	assert.equal(t.store.get(INST_A).shop, 'my-store.myshopify.com')
 	assert.equal(t.store.installationForShop('my-store.myshopify.com'), INST_A)
-	assert.equal(t.store.webhooksFor(INST_A).length, 5)
+	assert.equal(t.store.webhooksFor(INST_A).length, 7)
 })
 
 test('a repeated connected does not create the webhooks twice', async() => {
@@ -55,7 +55,7 @@ test('a repeated connected does not create the webhooks twice', async() => {
 	await connect()
 	await connect('test-shop.myshopify.com')
 	assert.equal(t.proxy.calls.filter(c => /webhookSubscriptionCreate/.test(c.query)).length, 1)
-	assert.equal(t.proxy.subs.length, 5)
+	assert.equal(t.proxy.subs.length, 7)
 })
 
 test('connected: bad signature 401, bad shop 400, shop already linked elsewhere 409, proxy failure 502', async() => {
@@ -90,8 +90,8 @@ test('uninstalled removes the webhooks at Shopify and every row; a bad label or 
 	const r = await t.botsPost('/uninstalled', body, { label: 'uninstalled' })
 	assert.equal(r.status, 200)
 	const deletes = t.proxy.calls.filter(c => /webhookSubscriptionDelete/.test(c.query))
-	assert.equal(deletes.length, 1) // one request deletes all five
-	assert.equal(Object.keys(deletes[0].variables).length, 5)
+	assert.equal(deletes.length, 1) // one request deletes all seven
+	assert.equal(Object.keys(deletes[0].variables).length, 7)
 	assert.equal(t.store.get(INST_A), undefined)
 	assert.deepEqual(t.store.webhooksFor(INST_A), [])
 	assert.equal(t.store.installationForShop('test-shop.myshopify.com'), undefined)

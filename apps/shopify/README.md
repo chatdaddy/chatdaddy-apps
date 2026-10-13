@@ -65,3 +65,11 @@ The Dockerfile and entrypoint are the example's (the entrypoint chowns the volum
 ## Local rehearsal
 
 `scripts/e2e-local` drives `examples/shopify-order`. To rehearse this app: point `APP_DOCKER_DIR`/the spawn at `apps/shopify`, publish its manifest (the stub appstore needs the new connection fields), replace step 5 by a `POST /connected` signed with the installation's secret (needs a fake proxy: start the app with a small wrapper that injects one) and then post webhooks signed with `SHOPIFY_CLIENT_SECRET` instead of pasting a per-shop secret. Not done in this PR.
+
+## Customer sync and COD (S-4, S-5)
+
+- `customers/create` and `customers/update` upsert a ChatDaddy contact by phone (`POST /contacts/upsert`). ChatDaddy custom fields are valued contact tags, so the fields (`shopify total spent`, `shopify order count`, `shopify last order date`, `shopify marketing consent`) and the tags (`shopify-customer`, `shopify-vip` at total spent >= 500 in the shop currency, `shopify-repeat` at >= 2 orders) are all written as tags. `connected` backfills the 250 most recently updated customers after it responds.
+- `customers/redact` (forwarded by the platform as `POST /compliance`) removes those fields and tags from the contact; `shop/redact` clears the shop's app-side rows (the installation stays).
+- **Needs bots #396 deployed:** webhooks and compliance events carry no app token, so webhook sync and `customers/redact` fetch one from `POST {CHATDADDY_BOTS_URL}/app-installations/{id}/token` (signed like a trigger delivery, cached until expiresAt minus 60 s). If the route answers non-2xx the sync is skipped (status logged) and `customers/redact` answers 503 so Shopify retries. Backfill uses the token `connected` brings.
+- Unverified: valued-tag upsert creating the field, `remove: true` in a contact patch, the repeated `contacts=` query for patch, and `orderCancel`'s exact shape.
+- COD: the `order-created` trigger's `isCod` is true for gateways named cash on delivery / COD (not Shopify's generic `manual`). Actions `tag-order` and `cancel-order` (reason CUSTOMER, restock, no refund unless `refund` is true).
