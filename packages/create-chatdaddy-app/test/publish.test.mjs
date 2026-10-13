@@ -11,7 +11,7 @@ const TOKEN = 'tok-secret-123456'
 const urlManifest = { ...validFullManifest, id: 'my-app', handler: { type: 'url', baseUrl: 'https://placeholder.example.com' } }
 
 /** fake appstore: `apps` is the registered set; `failVersion` forces a status on appVersionCreate */
-async function fake({ apps = [], failVersion } = {}) {
+async function fake({ apps = [], failVersion, versionBody } = {}) {
 	const calls = []
 	const server = createServer((req, res) => {
 		let body = ''
@@ -30,7 +30,7 @@ async function fake({ apps = [], failVersion } = {}) {
 			}
 
 			if(req.method === 'POST' && m?.[2]) {
-				return failVersion ? send(failVersion, { message: 'version exists' }) : send(200, { id: 1 })
+				return failVersion ? send(failVersion, versionBody || { message: 'version exists' }) : send(200, { id: 1 })
 			}
 
 			send(500, {})
@@ -152,5 +152,19 @@ test('publish: a redirect is not followed, so the token never reaches the target
 	} finally {
 		await close(redirector)
 		await close(target)
+	}
+})
+
+test('publish: the server validator\'s reasons (data.errors) are printed', async() => {
+	const versionBody = { message: 'Manifest failed validation', data: { errors: [{ path: '/scopes', message: 'unknown scope "TRIGGERS_FIRE"' }] } }
+	const srv = await fake({ apps: ['my-app'], failVersion: 400, versionBody })
+	try {
+		const r = await run(urlManifest, { srv })
+		assert.equal(r.code, 1)
+		assert.match(r.err, /appVersionCreate failed: HTTP 400 Manifest failed validation/)
+		assert.match(r.err, /\/scopes: unknown scope "TRIGGERS_FIRE"/)
+		assert.ok(!r.err.includes(TOKEN))
+	} finally {
+		await srv.stop()
 	}
 })
