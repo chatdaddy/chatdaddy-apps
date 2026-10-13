@@ -1,8 +1,8 @@
 # Shopify-side config for ChatDaddy for Shopify (the app in Shopify's Dev Dashboard).
-# Link once with `shopify app config link` (fills client_id), push changes with `shopify app deploy`.
+# Linked with `shopify app config link`; push changes with `shopify app deploy`.
 # Merchants start in ChatDaddy, not in Shopify, so the app is not embedded (S-6 decides that later).
-client_id = ""
-name = "ChatDaddy for Shopify"
+client_id = "8c91c9545eed6c5ba4d152d4f692c93f"
+name = "ChatDaddy"
 application_url = "https://www.beta.chatdaddy.tech/apps"
 embedded = false
 
@@ -15,7 +15,7 @@ scopes = "read_customers,read_fulfillments,read_orders,write_orders"
 redirect_urls = ["https://www.beta.chatdaddy.tech/apps/connect/callback"]
 
 [webhooks]
-api_version = "2026-07"
+api_version = "2027-01"
 
   # GDPR topics are app-level and handled by bots (P5 A-7, bots #394). Per-shop order/customer
   # webhooks are registered by the app itself on `connected`, so none are listed here.
